@@ -1,5 +1,7 @@
 import math
+import threading
 import tkinter as tk
+from pymavlink import mavutil
 from .Styles import Colors
 
 

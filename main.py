@@ -10,8 +10,10 @@ Current scope:
 Telemetry, MAVLink and mission control are intentionally
 not wired here yet.
 """
-
+import math
+import threading
 import tkinter as tk
+from pymavlink import mavutil
 
 from Rigel_GCS.UI.Main_Window import MainWindow
 from Rigel_GCS.Telemetry.Telemetry_Manager import TelemetryManager
@@ -22,6 +24,10 @@ from Rigel_GCS.MAP_INTERFACE.Map_Manager import MapManager
 from Rigel_GCS.Module.Mapping.CAMERA_INTERFACE.CAMERA_Widget import (
     CameraWidget
 )
+from Rigel_GCS.UI.Flight_HUD import FlightHUD
+
+
+
 
 
 def main():
@@ -29,23 +35,19 @@ def main():
     # =========================================================
     # ROOT
     # =========================================================
-
     root = tk.Tk()
 
     # =========================================================
     # RIGEL UI
     # =========================================================
-
     ui = MainWindow(root)
 
     # =========================================================
     # MAP
     # =========================================================
-
     map_widget = MapWidget(
         ui.map_container.host
     )
-
     map_manager = MapManager(
         map_widget
     )
@@ -53,7 +55,6 @@ def main():
     # =========================================================
     # MOUNT MAP
     # =========================================================
-
     ui.mount_map_interface(
         map_widget
     )
@@ -61,16 +62,13 @@ def main():
     # =========================================================
     # MAP CONFIGURATION
     # =========================================================
-
     map_manager.set_map_provider(
         "esri_satellite"
     )
-
     map_manager.set_center(
         10.8231,
         106.6297
     )
-
     map_manager.set_zoom(
         12
     )
@@ -78,7 +76,6 @@ def main():
     # =========================================================
     # KEEP MAP REFERENCES
     # =========================================================
-
     ui.map_widget = map_widget
     ui.map_manager = map_manager
 
