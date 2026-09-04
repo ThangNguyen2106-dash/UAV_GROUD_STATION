@@ -36,11 +36,10 @@ DISPLAY_INTERVAL = 1.0
 
 message_counter = Counter()
 heartbeat_count = 0
-telemetry_update_count = 0
 
 
 # ============================================================
-# CALLBACKS
+# CALLBACK
 # ============================================================
 
 def on_message(message):
@@ -49,6 +48,7 @@ def on_message(message):
     message_type = getattr(message, "message_type", None)
 
     if message_type is None:
+
         getter = getattr(message, "get_type", None)
 
         if callable(getter):
@@ -65,12 +65,6 @@ def on_message(message):
 
     if message_type == "HEARTBEAT":
         heartbeat_count += 1
-
-
-def on_telemetry_update(state, message):
-    global telemetry_update_count
-
-    telemetry_update_count += 1
 
 
 # ============================================================
@@ -121,19 +115,35 @@ def display_state(state):
 
     print("\n[POSITION]")
 
-    latitude = value(state, "latitude")
-    longitude = value(state, "longitude")
-    altitude = value(state, "altitude")
-    relative_altitude = value(state, "relative_altitude")
-    groundspeed = value(state, "groundspeed")
-    heading = value(state, "heading")
+    print(
+        f"Latitude        : "
+        f"{fmt(value(state, 'latitude'), '.7f')}"
+    )
 
-    print(f"Latitude        : {fmt(latitude, '.7f')}")
-    print(f"Longitude       : {fmt(longitude, '.7f')}")
-    print(f"Altitude        : {fmt(altitude, '.2f')} m")
-    print(f"Relative Alt    : {fmt(relative_altitude, '.2f')} m")
-    print(f"Ground Speed    : {fmt(groundspeed, '.2f')} m/s")
-    print(f"Heading         : {fmt(heading, '.1f')} deg")
+    print(
+        f"Longitude       : "
+        f"{fmt(value(state, 'longitude'), '.7f')}"
+    )
+
+    print(
+        f"Altitude        : "
+        f"{fmt(value(state, 'altitude'), '.2f')} m"
+    )
+
+    print(
+        f"Relative Alt    : "
+        f"{fmt(value(state, 'relative_altitude'), '.2f')} m"
+    )
+
+    print(
+        f"Ground Speed    : "
+        f"{fmt(value(state, 'groundspeed'), '.2f')} m/s"
+    )
+
+    print(
+        f"Heading         : "
+        f"{fmt(value(state, 'heading'), '.1f')} deg"
+    )
 
     # --------------------------------------------------------
     # GPS
@@ -141,11 +151,15 @@ def display_state(state):
 
     print("\n[GPS]")
 
-    fix_type = value(state, "fix_type")
-    satellites = value(state, "satellites_visible")
+    print(
+        f"Fix Type        : "
+        f"{fmt(value(state, 'fix_type'))}"
+    )
 
-    print(f"Fix Type        : {fmt(fix_type)}")
-    print(f"Satellites      : {fmt(satellites)}")
+    print(
+        f"Satellites      : "
+        f"{fmt(value(state, 'satellites_visible'))}"
+    )
 
     # --------------------------------------------------------
     # ATTITUDE
@@ -153,13 +167,20 @@ def display_state(state):
 
     print("\n[ATTITUDE]")
 
-    roll = value(state, "roll")
-    pitch = value(state, "pitch")
-    yaw = value(state, "yaw")
+    print(
+        f"Roll            : "
+        f"{fmt(value(state, 'roll'), '.2f')} deg"
+    )
 
-    print(f"Roll            : {fmt(roll, '.2f')} deg")
-    print(f"Pitch           : {fmt(pitch, '.2f')} deg")
-    print(f"Yaw             : {fmt(yaw, '.2f')} deg")
+    print(
+        f"Pitch           : "
+        f"{fmt(value(state, 'pitch'), '.2f')} deg"
+    )
+
+    print(
+        f"Yaw             : "
+        f"{fmt(value(state, 'yaw'), '.2f')} deg"
+    )
 
     # --------------------------------------------------------
     # FLIGHT
@@ -167,15 +188,25 @@ def display_state(state):
 
     print("\n[FLIGHT]")
 
-    armed = value(state, "armed")
-    mav_type = value(state, "mav_type")
-    autopilot = value(state, "autopilot")
-    flight_mode = value(state, "flight_mode")
+    print(
+        f"Armed           : "
+        f"{fmt(value(state, 'armed'))}"
+    )
 
-    print(f"Armed           : {fmt(armed)}")
-    print(f"MAV Type        : {fmt(mav_type)}")
-    print(f"Autopilot       : {fmt(autopilot)}")
-    print(f"Flight Mode     : {fmt(flight_mode)}")
+    print(
+        f"MAV Type        : "
+        f"{fmt(value(state, 'mav_type'))}"
+    )
+
+    print(
+        f"Autopilot       : "
+        f"{fmt(value(state, 'autopilot'))}"
+    )
+
+    print(
+        f"Flight Mode     : "
+        f"{fmt(value(state, 'flight_mode'))}"
+    )
 
     # --------------------------------------------------------
     # VFR HUD
@@ -183,31 +214,51 @@ def display_state(state):
 
     print("\n[VFR HUD]")
 
-    airspeed = value(state, "airspeed")
-    vfr_groundspeed = value(state, "vfr_groundspeed")
-    throttle = value(state, "throttle")
-    climb = value(state, "climb")
+    print(
+        f"Airspeed        : "
+        f"{fmt(value(state, 'airspeed'), '.2f')} m/s"
+    )
 
-    print(f"Airspeed        : {fmt(airspeed, '.2f')} m/s")
-    print(f"Ground Speed    : {fmt(vfr_groundspeed, '.2f')} m/s")
-    print(f"Throttle        : {fmt(throttle, '.1f')} %")
-    print(f"Climb           : {fmt(climb, '.2f')} m/s")
+    print(
+        f"Ground Speed    : "
+        f"{fmt(value(state, 'vfr_groundspeed'), '.2f')} m/s"
+    )
+
+    print(
+        f"Throttle        : "
+        f"{fmt(value(state, 'throttle'), '.1f')} %"
+    )
+
+    print(
+        f"Climb           : "
+        f"{fmt(value(state, 'climb'), '.2f')} m/s"
+    )
 
     # --------------------------------------------------------
-    # BATTERY / SYSTEM
+    # BATTERY
     # --------------------------------------------------------
 
     print("\n[BATTERY / SYSTEM]")
 
-    voltage = value(state, "voltage_battery")
-    current = value(state, "current_battery")
-    battery_remaining = value(state, "battery_remaining")
-    load = value(state, "load")
+    print(
+        f"Voltage         : "
+        f"{fmt(value(state, 'voltage_battery'), '.3f')} V"
+    )
 
-    print(f"Voltage         : {fmt(voltage, '.3f')} V")
-    print(f"Current         : {fmt(current, '.3f')} A")
-    print(f"Battery         : {fmt(battery_remaining)} %")
-    print(f"Load            : {fmt(load)}")
+    print(
+        f"Current         : "
+        f"{fmt(value(state, 'current_battery'), '.3f')} A"
+    )
+
+    print(
+        f"Battery         : "
+        f"{fmt(value(state, 'battery_remaining'))} %"
+    )
+
+    print(
+        f"Load            : "
+        f"{fmt(value(state, 'load'))}"
+    )
 
     # --------------------------------------------------------
     # HOME
@@ -215,13 +266,20 @@ def display_state(state):
 
     print("\n[HOME]")
 
-    home_latitude = value(state, "home_latitude")
-    home_longitude = value(state, "home_longitude")
-    home_altitude = value(state, "home_altitude")
+    print(
+        f"Home Latitude   : "
+        f"{fmt(value(state, 'home_latitude'), '.7f')}"
+    )
 
-    print(f"Home Latitude   : {fmt(home_latitude, '.7f')}")
-    print(f"Home Longitude  : {fmt(home_longitude, '.7f')}")
-    print(f"Home Altitude   : {fmt(home_altitude, '.2f')} m")
+    print(
+        f"Home Longitude  : "
+        f"{fmt(value(state, 'home_longitude'), '.7f')}"
+    )
+
+    print(
+        f"Home Altitude   : "
+        f"{fmt(value(state, 'home_altitude'), '.2f')} m"
+    )
 
     # --------------------------------------------------------
     # STATUS TEXT
@@ -247,10 +305,7 @@ def find_serial_device(manager):
 
     devices = manager.telemetry.all()
 
-    # --------------------------------------------------------
-    # Prefer SYSID=1 / COMPID=1
-    # --------------------------------------------------------
-
+    # Prefer SYSID=1 COMPID=1
     for state in devices:
 
         if (
@@ -260,10 +315,7 @@ def find_serial_device(manager):
         ):
             return state
 
-    # --------------------------------------------------------
-    # Fallback: any SERIAL device
-    # --------------------------------------------------------
-
+    # Fallback
     for state in devices:
 
         if value(state, "transport") == "SERIAL":
@@ -300,20 +352,10 @@ def main():
         )
 
         # ====================================================
-        # REGISTER CALLBACKS
+        # REGISTER MESSAGE CALLBACK
         # ====================================================
 
         manager.on_message = on_message
-
-        # ConnectionManager hiện tại không có
-        # on_telemetry_updated callback riêng.
-        #
-        # TelemetryManager nằm bên trong:
-        #
-        # manager.telemetry
-        #
-        # nên telemetry update sẽ được kiểm tra trực tiếp
-        # thông qua TelemetryState trong vòng test.
 
         # ====================================================
         # CONNECT SERIAL
@@ -332,7 +374,7 @@ def main():
         print("[OK] Serial connection started.")
 
         # ====================================================
-        # WAIT FOR HEARTBEAT
+        # WAIT HEARTBEAT
         # ====================================================
 
         print()
@@ -376,30 +418,12 @@ def main():
 
         test_start = time.time()
         last_display = 0.0
-        last_message_count = 0
 
         while time.time() - test_start < TEST_DURATION:
 
             state = find_serial_device(manager)
 
             if state is not None:
-
-                # --------------------------------------------
-                # Estimate telemetry update count
-                # --------------------------------------------
-
-                current_message_count = sum(message_counter.values())
-
-                if current_message_count > last_message_count:
-                    telemetry_update_count += (
-                        current_message_count - last_message_count
-                    )
-
-                    last_message_count = current_message_count
-
-                # --------------------------------------------
-                # Display once per second
-                # --------------------------------------------
 
                 now = time.time()
 
@@ -412,7 +436,7 @@ def main():
             time.sleep(0.05)
 
         # ====================================================
-        # FINAL STATE
+        # FINAL DIAGNOSTIC
         # ====================================================
 
         print()
@@ -424,12 +448,35 @@ def main():
 
         if state is not None:
 
-            print(f"DEVICE ID       : {value(state, 'device_id', '--')}")
-            print(f"TRANSPORT       : {value(state, 'transport', '--')}")
-            print(f"CONNECTED       : {value(state, 'connected', False)}")
-            print(f"HEARTBEAT       : {value(state, 'heartbeat_alive', False)}")
-            print(f"SYSID           : {value(state, 'sysid', '--')}")
-            print(f"COMPID          : {value(state, 'compid', '--')}")
+            print(
+                f"DEVICE ID       : "
+                f"{value(state, 'device_id', '--')}"
+            )
+
+            print(
+                f"TRANSPORT       : "
+                f"{value(state, 'transport', '--')}"
+            )
+
+            print(
+                f"CONNECTED       : "
+                f"{value(state, 'connected', False)}"
+            )
+
+            print(
+                f"HEARTBEAT       : "
+                f"{value(state, 'heartbeat_alive', False)}"
+            )
+
+            print(
+                f"SYSID           : "
+                f"{value(state, 'sysid', '--')}"
+            )
+
+            print(
+                f"COMPID          : "
+                f"{value(state, 'compid', '--')}"
+            )
 
             print()
             print("[POSITION]")
@@ -529,13 +576,8 @@ def main():
             f"{sum(message_counter.values())}"
         )
 
-        print(
-            f"TELEM UPDATES     : "
-            f"{telemetry_update_count}"
-        )
-
         # ====================================================
-        # REQUIRED MAVLINK MESSAGES
+        # REQUIRED MESSAGES
         # ====================================================
 
         required_messages = [
@@ -609,7 +651,7 @@ def main():
         return 130
 
     # ========================================================
-    # UNHANDLED ERROR
+    # ERROR
     # ========================================================
 
     except Exception as exc:
@@ -631,7 +673,11 @@ def main():
         if manager is not None:
 
             try:
-                manager.disconnect_all()
+
+                # ConnectionManager hiện tại có disconnect().
+                manager.disconnect()
+
+                print("[CLEANUP] SERIAL connection closed.")
 
             except Exception as exc:
 

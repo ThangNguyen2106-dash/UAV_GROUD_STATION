@@ -2,417 +2,740 @@ from __future__ import annotations
 
 import sys
 import time
-from collections import Counter, deque
 from pathlib import Path
+from typing import Optional
 
-ROOT = Path(__file__).resolve().parents[2]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+# ============================================================
+# PROJECT ROOT
+# Cho phép chạy trực tiếp bằng VS Code:
+# python Rigel_GCS/test/test_telemetry_select.py
+# ============================================================
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 
 from Rigel_GCS.core.connection_manager import ConnectionManager
 
 
 # ============================================================
-# STEP 12 - LIVE TELEMETRY TEST
-# Purpose:
-#   1. Select UDP or SERIAL.
-#   2. Connect to Simulator / Pixhawk.
-#   3. Show transport-isolated telemetry.
-#   4. Show exactly which MAVLink message types are arriving.
-#      This is important for diagnosing Pixhawk SERIAL telemetry.
+# CONFIG
+# ============================================================
+
+SERIAL_PORT = "COM6"
+SERIAL_BAUDRATE = 115200
+
+UDP_RX_HOST = "0.0.0.0"
+UDP_RX_PORT = 14550
+
+UDP_TX_HOST = "127.0.0.1"
+UDP_TX_PORT = 14560
+
+DISPLAY_INTERVAL = 1.0
+
+
+# ============================================================
+# GLOBAL
+# ============================================================
+
+manager: Optional[ConnectionManager] = None
+
+message_counter = {}
+
+
+# ============================================================
+# MAVLINK MESSAGE CALLBACK
+# ============================================================
+
+def on_message(message):
+    """
+    Callback nhận tất cả MAVLink message từ ConnectionManager.
+    """
+
+    try:
+        message_type = message.get_type()
+
+        if message_type == "BAD_DATA":
+            return
+
+        message_counter[message_type] = (
+            message_counter.get(message_type, 0) + 1
+        )
+
+    except Exception:
+        pass
+
+
+# ============================================================
+# MENU
+# ============================================================
+
+def print_menu():
+    print()
+    print("=" * 72)
+    print("              RIGEL TELEMETRY TEST - STEP 12")
+    print("=" * 72)
+    print()
+    print("[1] UDP")
+    print("    Drone Simulator")
+    print("    RX : 0.0.0.0:14550")
+    print("    TX : 127.0.0.1:14560")
+    print()
+    print("[2] SERIAL")
+    print("    Pixhawk")
+    print(f"    PORT : {SERIAL_PORT}")
+    print(f"    BAUD : {SERIAL_BAUDRATE}")
+    print()
+    print("[0] EXIT")
+    print()
+    print("=" * 72)
+
+
+# ============================================================
+# FIND DEVICE
+# ============================================================
+
+def find_device():
+    """
+    Tìm thiết bị ưu tiên SYSID=1 / COMPID=1.
+
+    Ưu tiên:
+        SERIAL:1:1
+        UDP:1:1
+
+    Nếu không tìm thấy thì lấy device đầu tiên.
+    """
+
+    try:
+        devices = manager.telemetry.all()
+    except Exception as exc:
+        print(f"[TELEMETRY ERROR] Cannot get devices: {exc}")
+        return None
+
+    if not devices:
+        return None
+
+    preferred_transport = None
+
+    if manager.connection_type:
+        preferred_transport = str(manager.connection_type).upper()
+
+    # --------------------------------------------------------
+    # Ưu tiên SYSID=1 COMPID=1
+    # --------------------------------------------------------
+
+    for device in devices:
+
+        try:
+            if (
+                int(device.sysid) == 1
+                and int(device.compid) == 1
+            ):
+                if preferred_transport is None:
+                    return device
+
+                if str(device.transport).upper() == preferred_transport:
+                    return device
+
+        except Exception:
+            continue
+
+    # --------------------------------------------------------
+    # Không có SYSID=1/COMPID=1 -> lấy thiết bị đầu tiên
+    # --------------------------------------------------------
+
+    return devices[0]
+
+
+# ============================================================
+# FORMAT
 # ============================================================
 
 def fmt(value, digits=2, suffix=""):
     if value is None:
         return "--"
+
     try:
         return f"{float(value):.{digits}f}{suffix}"
-    except (TypeError, ValueError):
+    except Exception:
         return str(value)
 
 
-def choose_transport():
-    print("=" * 90)
-    print(" RIGEL GCS - STEP 12 - LIVE MAVLINK TELEMETRY TEST")
-    print("=" * 90)
-    print("[1] UDP    -> Drone Simulator")
-    print("[2] SERIAL -> Pixhawk")
-    print("=" * 90)
-
-    while True:
-        choice = input("Chọn [1/2]: ").strip()
-        if choice == "1":
-            return "UDP"
-        if choice == "2":
-            return "SERIAL"
-        print("[ERROR] Vui lòng nhập 1 hoặc 2.")
-
-
-def choose_serial_port():
-    print("\n--- SERIAL PORT ---")
+def fmt_int(value, suffix=""):
+    if value is None:
+        return "--"
 
     try:
-        from serial.tools import list_ports
-        ports = list(list_ports.comports())
-    except Exception as exc:
-        print(f"[WARN] Không đọc được danh sách COM: {exc}")
-        ports = []
-
-    if ports:
-        for index, port in enumerate(ports, 1):
-            desc = port.description or "Unknown"
-            print(f"[{index}] {port.device:<8} {desc}")
-
-        print("[0] Nhập COM thủ công")
-
-        while True:
-            choice = input("Chọn COM: ").strip()
-
-            if choice == "0":
-                break
-
-            if choice.isdigit() and 1 <= int(choice) <= len(ports):
-                return ports[int(choice) - 1].device.upper()
-
-            print("[ERROR] Lựa chọn không hợp lệ.")
-
-    return (input("Nhập COM, ví dụ COM6: ").strip() or "COM6").upper()
-
-
-def selected_state(manager, transport):
-    states = [
-        state
-        for state in manager.get_all_telemetry()
-        if str(getattr(state, "transport", "")).upper() == transport
-    ]
-
-    if not states:
-        return None
-
-    states.sort(
-        key=lambda state: bool(getattr(state, "heartbeat_alive", False)),
-        reverse=True,
-    )
-    return states[0]
-
-
-def message_type(message):
-    try:
-        return str(message.get_type()).upper()
+        return f"{int(value)}{suffix}"
     except Exception:
-        return type(message).__name__.upper()
+        return str(value)
 
 
-def make_rx_tracker():
-    """
-    Returns:
-        rx_counter:
-            Counter of MAVLink message types received.
-        recent:
-            Small queue containing the latest message names.
-        last_message:
-            Mutable dict containing latest raw message metadata.
-    """
-    rx_counter = Counter()
-    recent = deque(maxlen=12)
-    last_message = {
-        "type": None,
-        "sysid": None,
-        "compid": None,
-        "time": None,
-    }
+# ============================================================
+# DISPLAY TELEMETRY
+# ============================================================
 
-    def on_message(message, device=None):
-        mtype = message_type(message)
-
-        try:
-            sysid = message.get_srcSystem()
-        except Exception:
-            sysid = None
-
-        try:
-            compid = message.get_srcComponent()
-        except Exception:
-            compid = None
-
-        rx_counter[mtype] += 1
-        recent.append(mtype)
-        last_message["type"] = mtype
-        last_message["sysid"] = sysid
-        last_message["compid"] = compid
-        last_message["time"] = time.monotonic()
-
-    return rx_counter, recent, last_message, on_message
-
-
-def show(state, transport, rx_counter, recent, last_message, started_at):
-    # ANSI clear-screen. If ANSI is not supported, output is still readable.
+def display_telemetry(device):
     print("\033[2J\033[H", end="")
 
-    print("=" * 90)
-    print(" RIGEL GCS - STEP 12 - LIVE MAVLINK TELEMETRY")
-    print("=" * 90)
+    print("=" * 72)
+    print("                    RIGEL TELEMETRY")
+    print("=" * 72)
 
-    print(f"TRANSPORT       : {transport}")
-    print(f"DEVICE ID       : {state.device_id}")
-    print(f"SYSID / COMPID  : {state.sysid} / {state.compid}")
-    print(f"CONNECTED       : {state.connected}")
-    print(f"HEARTBEAT       : {state.heartbeat_alive}")
-
-    print("-" * 90)
-    print("[POSITION]")
-    print(f"Latitude        : {fmt(getattr(state, 'latitude', None), 7)}")
-    print(f"Longitude       : {fmt(getattr(state, 'longitude', None), 7)}")
-    print(f"Altitude        : {fmt(getattr(state, 'altitude', None), 2, ' m')}")
-    print(
-        f"Relative Alt    : "
-        f"{fmt(getattr(state, 'relative_altitude', None), 2, ' m')}"
-    )
-    print(
-        f"Ground Speed    : "
-        f"{fmt(getattr(state, 'groundspeed', None), 2, ' m/s')}"
-    )
-    print(f"Heading         : {fmt(getattr(state, 'heading', None), 1, ' deg')}")
-
-    print("-" * 90)
-    print("[GPS]")
-    print(f"Fix Type        : {getattr(state, 'fix_type', None) if getattr(state, 'fix_type', None) is not None else '--'}")
-    print(
-        f"Satellites      : "
-        f"{getattr(state, 'satellites_visible', None) if getattr(state, 'satellites_visible', None) is not None else '--'}"
-    )
-
-    print("-" * 90)
-    print("[ATTITUDE]")
-    print(f"Roll            : {fmt(getattr(state, 'roll', None), 3, ' rad')}")
-    print(f"Pitch           : {fmt(getattr(state, 'pitch', None), 3, ' rad')}")
-    print(f"Yaw             : {fmt(getattr(state, 'yaw', None), 3, ' rad')}")
-
-    print("-" * 90)
-    print("[FLIGHT]")
-    print(f"Armed           : {getattr(state, 'armed', False)}")
-    print(f"Airspeed        : {fmt(getattr(state, 'airspeed', None), 2, ' m/s')}")
-    print(
-        f"VFR Groundspd   : "
-        f"{fmt(getattr(state, 'vfr_groundspeed', None), 2, ' m/s')}"
-    )
-    print(f"Throttle        : {fmt(getattr(state, 'throttle', None), 1, ' %')}")
-    print(f"Climb           : {fmt(getattr(state, 'climb', None), 2, ' m/s')}")
-
-    print("-" * 90)
-    print("[BATTERY / SYSTEM]")
-    print(
-        f"Battery         : "
-        f"{fmt(getattr(state, 'battery_remaining', None), 1, ' %')}"
-    )
-    print(
-        f"Voltage         : "
-        f"{fmt(getattr(state, 'voltage_battery', None), 3, ' V')}"
-    )
-    print(
-        f"Current         : "
-        f"{fmt(getattr(state, 'current_battery', None), 3, ' A')}"
-    )
-    print(f"Load            : {fmt(getattr(state, 'load', None), 1, ' %')}")
-
-    print("-" * 90)
-    print("[HOME]")
-    print(
-        f"Home Latitude   : "
-        f"{fmt(getattr(state, 'home_latitude', None), 7)}"
-    )
-    print(
-        f"Home Longitude  : "
-        f"{fmt(getattr(state, 'home_longitude', None), 7)}"
-    )
-    print(
-        f"Home Altitude   : "
-        f"{fmt(getattr(state, 'home_altitude', None), 2, ' m')}"
-    )
-
-    print("-" * 90)
-    print("[STATUS]")
-    print(getattr(state, "status_text", None) or "--")
-
-    # ------------------------------------------------------------
-    # RAW MAVLINK RX DIAGNOSTICS
-    # ------------------------------------------------------------
-    print("-" * 90)
-    print("[MAVLINK RX DIAGNOSTICS]")
-    total = sum(rx_counter.values())
-    elapsed = max(time.monotonic() - started_at, 0.001)
-    rate = total / elapsed
-
-    print(f"Total MAVLink messages : {total}")
-    print(f"RX rate                : {rate:.1f} msg/s")
-
-    if last_message["type"] is None:
-        print("Last message           : --")
-    else:
-        print(
-            f"Last message           : "
-            f"{last_message['type']} "
-            f"(SYSID={last_message['sysid']} COMPID={last_message['compid']})"
-        )
-
-    print("Message counts:")
-    if rx_counter:
-        for name, count in rx_counter.most_common():
-            print(f"  {name:<22} {count}")
-    else:
-        print("  --")
-
-    print("Recent:")
-    if recent:
-        print("  " + " -> ".join(recent))
-    else:
-        print("  --")
-
-    print("=" * 90)
-    print("Ctrl+C = STOP")
     print()
 
+    # ========================================================
+    # DEVICE
+    # ========================================================
 
-def main():
-    transport = choose_transport()
+    print("[DEVICE]")
+
+    print(
+        f"Device ID       : "
+        f"{getattr(device, 'device_id', '--')}"
+    )
+
+    print(
+        f"Transport       : "
+        f"{getattr(device, 'transport', '--')}"
+    )
+
+    print(
+        f"SYSID           : "
+        f"{getattr(device, 'sysid', '--')}"
+    )
+
+    print(
+        f"COMPID          : "
+        f"{getattr(device, 'compid', '--')}"
+    )
+
+    print(
+        f"Connected       : "
+        f"{getattr(device, 'connected', False)}"
+    )
+
+    print(
+        f"Heartbeat       : "
+        f"{getattr(device, 'heartbeat_alive', False)}"
+    )
+
+    print()
+
+    # ========================================================
+    # POSITION
+    # ========================================================
+
+    print("[POSITION]")
+
+    print(
+        f"Latitude        : "
+        f"{fmt(getattr(device, 'latitude', None), 7)}"
+    )
+
+    print(
+        f"Longitude       : "
+        f"{fmt(getattr(device, 'longitude', None), 7)}"
+    )
+
+    print(
+        f"Altitude        : "
+        f"{fmt(getattr(device, 'altitude', None), 2, ' m')}"
+    )
+
+    print(
+        f"Relative Alt    : "
+        f"{fmt(getattr(device, 'relative_altitude', None), 2, ' m')}"
+    )
+
+    print(
+        f"Ground Speed    : "
+        f"{fmt(getattr(device, 'groundspeed', None), 2, ' m/s')}"
+    )
+
+    print(
+        f"Heading         : "
+        f"{fmt(getattr(device, 'heading', None), 1, ' deg')}"
+    )
+
+    print()
+
+    # ========================================================
+    # GPS
+    # ========================================================
+
+    print("[GPS]")
+
+    print(
+        f"Fix Type        : "
+        f"{fmt_int(getattr(device, 'fix_type', None))}"
+    )
+
+    print(
+        f"Satellites      : "
+        f"{fmt_int(getattr(device, 'satellites_visible', None))}"
+    )
+
+    print()
+
+    # ========================================================
+    # ATTITUDE
+    # ========================================================
+
+    print("[ATTITUDE]")
+
+    print(
+        f"Roll            : "
+        f"{fmt(getattr(device, 'roll', None), 2, ' deg')}"
+    )
+
+    print(
+        f"Pitch           : "
+        f"{fmt(getattr(device, 'pitch', None), 2, ' deg')}"
+    )
+
+    print(
+        f"Yaw             : "
+        f"{fmt(getattr(device, 'yaw', None), 2, ' deg')}"
+    )
+
+    print()
+
+    # ========================================================
+    # FLIGHT
+    # ========================================================
+
+    print("[FLIGHT]")
+
+    print(
+        f"Armed           : "
+        f"{getattr(device, 'armed', False)}"
+    )
+
+    print(
+        f"MAV Type        : "
+        f"{fmt_int(getattr(device, 'mav_type', None))}"
+    )
+
+    print(
+        f"Autopilot       : "
+        f"{fmt_int(getattr(device, 'autopilot', None))}"
+    )
+
+    print(
+        f"Flight Mode     : "
+        f"{getattr(device, 'flight_mode', '--')}"
+    )
+
+    print()
+
+    # ========================================================
+    # VFR HUD
+    # ========================================================
+
+    print("[VFR HUD]")
+
+    print(
+        f"Airspeed        : "
+        f"{fmt(getattr(device, 'airspeed', None), 2, ' m/s')}"
+    )
+
+    print(
+        f"Ground Speed    : "
+        f"{fmt(getattr(device, 'vfr_groundspeed', None), 2, ' m/s')}"
+    )
+
+    print(
+        f"Throttle        : "
+        f"{fmt(getattr(device, 'throttle', None), 1, ' %')}"
+    )
+
+    print(
+        f"Climb           : "
+        f"{fmt(getattr(device, 'climb', None), 2, ' m/s')}"
+    )
+
+    print()
+
+    # ========================================================
+    # BATTERY / SYSTEM
+    # ========================================================
+
+    print("[BATTERY / SYSTEM]")
+
+    print(
+        f"Voltage         : "
+        f"{fmt(getattr(device, 'voltage_battery', None), 3, ' V')}"
+    )
+
+    print(
+        f"Current         : "
+        f"{fmt(getattr(device, 'current_battery', None), 3, ' A')}"
+    )
+
+    print(
+        f"Battery         : "
+        f"{fmt_int(getattr(device, 'battery_remaining', None), ' %')}"
+    )
+
+    print(
+        f"Load            : "
+        f"{fmt(getattr(device, 'load', None), 1)}"
+    )
+
+    print()
+
+    # ========================================================
+    # HOME
+    # ========================================================
+
+    print("[HOME]")
+
+    print(
+        f"Home Latitude   : "
+        f"{fmt(getattr(device, 'home_latitude', None), 7)}"
+    )
+
+    print(
+        f"Home Longitude  : "
+        f"{fmt(getattr(device, 'home_longitude', None), 7)}"
+    )
+
+    print(
+        f"Home Altitude   : "
+        f"{fmt(getattr(device, 'home_altitude', None), 2, ' m')}"
+    )
+
+    print()
+
+    # ========================================================
+    # STATUS TEXT
+    # ========================================================
+
+    print("[STATUS TEXT]")
+
+    print(
+        f"Message         : "
+        f"{getattr(device, 'status_text', '--') or '--'}"
+    )
+
+    print()
+
+    # ========================================================
+    # MESSAGE STATISTICS
+    # ========================================================
+
+    print("[MESSAGE STATISTICS]")
+
+    important_messages = [
+        "HEARTBEAT",
+        "GLOBAL_POSITION_INT",
+        "GPS_RAW_INT",
+        "ATTITUDE",
+        "SYS_STATUS",
+        "BATTERY_STATUS",
+        "VFR_HUD",
+        "HOME_POSITION",
+        "STATUSTEXT",
+    ]
+
+    total = sum(message_counter.values())
+
+    for name in important_messages:
+        print(
+            f"{name:<20}: "
+            f"{message_counter.get(name, 0)}"
+        )
+
+    print()
+
+    print(f"TOTAL MAVLINK MSG : {total}")
+
+    print()
+    print("=" * 72)
+
+
+# ============================================================
+# WAIT FOR DEVICE
+# ============================================================
+
+def wait_for_device(timeout=10.0):
+    print()
+    print("[DISCOVERY] Waiting for MAVLink device...")
+
+    start = time.monotonic()
+
+    while time.monotonic() - start < timeout:
+
+        device = find_device()
+
+        if device is not None:
+
+            print()
+            print(
+                "[DISCOVERY] Device found:"
+            )
+
+            print(
+                f"  Device ID : "
+                f"{getattr(device, 'device_id', '--')}"
+            )
+
+            print(
+                f"  Transport : "
+                f"{getattr(device, 'transport', '--')}"
+            )
+
+            print(
+                f"  SYSID     : "
+                f"{getattr(device, 'sysid', '--')}"
+            )
+
+            print(
+                f"  COMPID    : "
+                f"{getattr(device, 'compid', '--')}"
+            )
+
+            return device
+
+        time.sleep(0.1)
+
+    return None
+
+
+# ============================================================
+# UDP
+# ============================================================
+
+def connect_udp():
+    print()
+    print("=" * 72)
+    print("CONNECT UDP - DRONE SIMULATOR")
+    print("=" * 72)
+
+    print()
+    print(
+        f"[UDP] RX : "
+        f"{UDP_RX_HOST}:{UDP_RX_PORT}"
+    )
+
+    print(
+        f"[UDP] TX : "
+        f"{UDP_TX_HOST}:{UDP_TX_PORT}"
+    )
+
+    try:
+        result = manager.connect_udp(
+            rx_host=UDP_RX_HOST,
+            rx_port=UDP_RX_PORT,
+            tx_host=UDP_TX_HOST,
+            tx_port=UDP_TX_PORT,
+            wait=False,
+        )
+
+        print()
+        print(f"[UDP] connect result: {result}")
+
+        return True
+
+    except TypeError as exc:
+
+        print()
+        print(
+            "[UDP ERROR] connect_udp() API mismatch:"
+        )
+        print(exc)
+
+        return False
+
+    except Exception as exc:
+
+        print()
+        print(
+            f"[UDP ERROR] "
+            f"{type(exc).__name__}: {exc}"
+        )
+
+        return False
+
+
+# ============================================================
+# SERIAL
+# ============================================================
+
+def connect_serial():
+    print()
+    print("=" * 72)
+    print("CONNECT SERIAL - PIXHAWK")
+    print("=" * 72)
+
+    print()
+    print(
+        f"[SERIAL] PORT : "
+        f"{SERIAL_PORT}"
+    )
+
+    print(
+        f"[SERIAL] BAUD : "
+        f"{SERIAL_BAUDRATE}"
+    )
+
+    try:
+        result = manager.connect_serial(
+            port=SERIAL_PORT,
+            baudrate=SERIAL_BAUDRATE,
+            wait=False,
+        )
+
+        print()
+        print(
+            f"[SERIAL] connect result: "
+            f"{result}"
+        )
+
+        return True
+
+    except Exception as exc:
+
+        print()
+        print(
+            f"[SERIAL ERROR] "
+            f"{type(exc).__name__}: {exc}"
+        )
+
+        return False
+
+
+# ============================================================
+# MAIN TEST
+# ============================================================
+
+def run_test():
+    global manager
 
     manager = ConnectionManager(
-        heartbeat_timeout=5.0,
+        heartbeat_timeout=3.0,
         link_lost_timeout=3.0,
     )
 
-    rx_counter, recent, last_message, on_message = make_rx_tracker()
-
-    # IMPORTANT:
-    # ConnectionManager already sends every decoded MAVLink message
-    # to on_message(). We use that callback only for diagnostics.
+    # ConnectionManager hiện tại nhận callback
+    # bằng cách gán thuộc tính sau khi tạo object.
     manager.on_message = on_message
 
+    print_menu()
+
+    choice = input("Select [0/1/2]: ").strip()
+
+    if choice == "0":
+        return
+
+    # ========================================================
+    # UDP
+    # ========================================================
+
+    if choice == "1":
+
+        if not connect_udp():
+            return
+
+    # ========================================================
+    # SERIAL
+    # ========================================================
+
+    elif choice == "2":
+
+        if not connect_serial():
+            return
+
+    else:
+
+        print()
+        print("[ERROR] Invalid selection.")
+        return
+
+    # ========================================================
+    # WAIT DEVICE
+    # ========================================================
+
+    device = wait_for_device(timeout=10.0)
+
+    if device is None:
+
+        print()
+        print("=" * 72)
+        print("RESULT : FAIL")
+        print("=" * 72)
+
+        print()
+        print("Không tìm thấy MAVLink device.")
+
+        if choice == "1":
+            print()
+            print("Kiểm tra:")
+            print("  1. Drone Simulator đang chạy.")
+            print("  2. Simulator TX -> 127.0.0.1:14550")
+            print("  3. GCS RX -> 0.0.0.0:14550")
+            print("  4. Simulator RX <- 0.0.0.0:14560")
+
+        elif choice == "2":
+            print()
+            print("Kiểm tra:")
+            print("  1. Pixhawk đã cắm USB.")
+            print(f"  2. COM port = {SERIAL_PORT}")
+            print(f"  3. Baudrate = {SERIAL_BAUDRATE}")
+
+        return
+
+    # ========================================================
+    # TELEMETRY LOOP
+    # ========================================================
+
+    print()
+    print("[TELEMETRY] Receiving MAVLink...")
+    print("[TELEMETRY] Press Ctrl+C to stop.")
+
     try:
-        if transport == "UDP":
-            print("\n--- UDP CONFIG ---")
-
-            rx_host = (
-                input("GCS RX host [0.0.0.0]: ").strip()
-                or "0.0.0.0"
-            )
-            rx_port = int(
-                input("GCS RX port [14550]: ").strip()
-                or "14550"
-            )
-            tx_host = (
-                input("Simulator RX host [127.0.0.1]: ").strip()
-                or "127.0.0.1"
-            )
-            tx_port = int(
-                input("Simulator RX port [14560]: ").strip()
-                or "14560"
-            )
-
-            print(f"\nGCS RX <- Simulator : {rx_host}:{rx_port}")
-            print(f"GCS TX -> Simulator : {tx_host}:{tx_port}")
-
-            ok = manager.connect_udp(
-                rx_host=rx_host,
-                rx_port=rx_port,
-                tx_host=tx_host,
-                tx_port=tx_port,
-                heartbeat_timeout=5.0,
-                wait=False,
-            )
-
-        else:
-            port = choose_serial_port()
-
-            baud = int(
-                input("Baudrate [115200]: ").strip()
-                or "115200"
-            )
-
-            print(f"\nPixhawk : {port} @ {baud}")
-
-            ok = manager.connect_serial(
-                port=port,
-                baudrate=baud,
-                heartbeat_timeout=5.0,
-                wait=False,
-            )
-
-        if not ok:
-            print("[FAIL] Không tạo được connection.")
-            return 1
-
-        print("[WAIT] Chờ HEARTBEAT trong tối đa 10 giây...")
-
-        deadline = time.monotonic() + 10.0
-        state = None
-
-        while time.monotonic() < deadline:
-            state = selected_state(manager, transport)
-
-            if state is not None and state.heartbeat_alive:
-                break
-
-            time.sleep(0.2)
-
-        if state is None or not state.heartbeat_alive:
-            print("[FAIL] Không nhận được HEARTBEAT.")
-
-            if transport == "UDP":
-                print("Kiểm tra Simulator TX -> GCS UDP 14550.")
-            else:
-                print(
-                    "Kiểm tra COM/baudrate và bảo đảm COM "
-                    "không bị phần mềm khác chiếm."
-                )
-
-            return 2
-
-        print(f"[OK] HEARTBEAT: {state.device_id}")
-        print("[OK] Bắt đầu kiểm tra toàn bộ MAVLink telemetry...")
-        time.sleep(1.0)
-
-        started_at = time.monotonic()
 
         while True:
-            state = selected_state(manager, transport)
 
-            if state is None:
-                print("[LOST] Không còn telemetry của transport đã chọn.")
-                break
+            # Device có thể được recreate/update,
+            # nên lấy lại object mỗi vòng.
+            current = find_device()
 
-            show(
-                state,
-                transport,
-                rx_counter,
-                recent,
-                last_message,
-                started_at,
-            )
+            if current is not None:
+                device = current
 
-            time.sleep(0.5)
+            display_telemetry(device)
+
+            time.sleep(DISPLAY_INTERVAL)
 
     except KeyboardInterrupt:
-        print("\n[STOP] Dừng STEP 12.")
 
-    except (ValueError, OSError) as exc:
-        print(f"[ERROR] {type(exc).__name__}: {exc}")
-        return 3
-
-    except Exception as exc:
-        print(f"[TEST ERROR] {type(exc).__name__}: {exc}")
-        return 4
+        print()
+        print()
+        print("=" * 72)
+        print("TEST STOPPED BY USER")
+        print("=" * 72)
 
     finally:
+
         try:
             manager.disconnect()
-        except Exception:
-            pass
+        except Exception as exc:
+            print(
+                f"[CLEANUP ERROR] "
+                f"{type(exc).__name__}: {exc}"
+            )
 
-        print("[DONE] Connection closed.")
+        print()
+        print("[CLEANUP] Connection closed.")
 
-    return 0
 
+# ============================================================
+# ENTRY
+# ============================================================
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    run_test()
