@@ -252,7 +252,7 @@ def display_telemetry(device):
 
     print(
         f"Ground Speed    : "
-        f"{fmt(getattr(device, 'groundspeed', None), 2, ' m/s')}"
+        f"{fmt(getattr(device, 'ground_speed', None), 2, ' m/s')}"
     )
 
     print(

@@ -39,6 +39,8 @@ class MAVLinkSession:
         dialect: str = "ardupilotmega",
         on_message: Optional[Callable] = None,
         on_heartbeat: Optional[Callable] = None,
+        send_raw: Optional[Callable[[bytes], bool]] = None,
+        request_telemetry: bool = True,
     ):
         self.source_system = source_system
         self.source_component = source_component
@@ -46,6 +48,9 @@ class MAVLinkSession:
 
         self.on_message = on_message
         self.on_heartbeat = on_heartbeat
+        self.send_raw = send_raw
+        self.request_telemetry_enabled = bool(request_telemetry)
+        self._telemetry_requested_for = set()
 
         # MAVLink parser.
         #
@@ -56,6 +61,8 @@ class MAVLinkSession:
         self._parser = mavlink_class(
             self._mavlink_output
         )
+        self._parser.srcSystem = self.source_system
+        self._parser.srcComponent = self.source_component
 
         self.target_system: Optional[int] = None
         self.target_component: Optional[int] = None
@@ -71,17 +78,71 @@ class MAVLinkSession:
 
         self._connected = False
 
+        self._telemetry_requested_for.clear()
+
     # ==========================================================
     # MAVLINK OUTPUT
     # ==========================================================
 
     def _mavlink_output(self, data: bytes) -> None:
-        """
-        Dummy output callback required by MAVLink object.
+        """Forward encoded MAVLink bytes to the active transport."""
+        if self.send_raw is None:
+            return
+        try:
+            self.send_raw(bytes(data))
+        except Exception as exc:
+            print(f"[MAVLINK TX ERROR] {type(exc).__name__}: {exc}")
 
-        MAVLinkSession is currently RX-focused.
-        TX will be implemented in a later step.
-        """
+    def send_message(self, message) -> bool:
+        """Pack and transmit one pymavlink message."""
+        if self.send_raw is None:
+            return False
+        try:
+            packet = message.pack(self._parser)
+            result = self.send_raw(packet)
+            return True if result is None else bool(result)
+        except Exception as exc:
+            print(f"[MAVLINK TX ERROR] {type(exc).__name__}: {exc}")
+            return False
+
+    def request_telemetry(self, target_system=None, target_component=None) -> int:
+        """Request useful telemetry streams from a discovered vehicle."""
+        if not self.request_telemetry_enabled or self.send_raw is None:
+            return 0
+        sysid = target_system if target_system is not None else self.target_system
+        compid = target_component if target_component is not None else self.target_component
+        if sysid is None or compid is None:
+            return 0
+        key = (int(sysid), int(compid))
+        if key in self._telemetry_requested_for:
+            return 0
+
+        cmd = getattr(mavutil.mavlink, 'MAV_CMD_SET_MESSAGE_INTERVAL', 511)
+        requests = [
+            (getattr(mavutil.mavlink, 'MAVLINK_MSG_ID_GLOBAL_POSITION_INT', 33), 100000),
+            (getattr(mavutil.mavlink, 'MAVLINK_MSG_ID_GPS_RAW_INT', 24), 200000),
+            (getattr(mavutil.mavlink, 'MAVLINK_MSG_ID_ATTITUDE', 30), 10000),
+            (getattr(mavutil.mavlink, 'MAVLINK_MSG_ID_SYS_STATUS', 1), 500000),
+            (getattr(mavutil.mavlink, 'MAVLINK_MSG_ID_BATTERY_STATUS', 147), 500000),
+            (getattr(mavutil.mavlink, 'MAVLINK_MSG_ID_VFR_HUD', 74), 200000),
+            (getattr(mavutil.mavlink, 'MAVLINK_MSG_ID_HOME_POSITION', 242), 1000000),
+        ]
+        sent = 0
+        for msg_id, interval_us in requests:
+            try:
+                message = self._parser.command_long_encode(
+                    int(sysid), int(compid), int(cmd), 0,
+                    float(msg_id), float(interval_us), -1, 0, 0, 0, 0
+                )
+                if self.send_message(message):
+                    sent += 1
+            except Exception as exc:
+                print(f"[MAVLINK TX REQUEST ERROR] {exc}")
+
+        if sent:
+            self._telemetry_requested_for.add(key)
+            print(f"[MAVLINK TX] Requested telemetry from SYSID={sysid} COMPID={compid} ({sent} streams)")
+        return sent
 
     # ==========================================================
     # RECEIVE
@@ -190,6 +251,9 @@ class MAVLinkSession:
                     print(
                         f"[HEARTBEAT CALLBACK ERROR] {exc}"
                     )
+
+            if self.request_telemetry_enabled:
+                self.request_telemetry(sysid, compid)
 
         # ------------------------------------------------------
         # GENERAL CALLBACK

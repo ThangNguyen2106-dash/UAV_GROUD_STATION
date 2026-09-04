@@ -118,7 +118,12 @@ class ConnectionManager:
                 return False
 
             transport = UDPTransport(cfg) if kind == 'UDP' else SerialTransport(cfg['port'], cfg['baudrate'])
-            session = MAVLinkSession(source_system=255, source_component=190)
+            session = MAVLinkSession(
+                source_system=255,
+                source_component=190,
+                send_raw=transport.send,
+                request_telemetry=True,
+            )
             link = _Link(key=key, kind=kind, transport=transport, session=session)
             self._links[key] = link
             self.connection_type = kind
