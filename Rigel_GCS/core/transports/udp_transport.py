@@ -30,7 +30,7 @@ class UDPConfig:
     rx_port: int = 14550
 
     tx_host: str = "127.0.0.1"
-    tx_port: int = 14560
+    tx_port: int = 14551
 
     recv_buffer_size: int = 65535
     timeout: float = 0.5
@@ -142,7 +142,6 @@ class UDPTransport:
 
     def _create_rx_socket(self) -> None:
         """Create UDP receive socket."""
-
         self._rx_socket = socket.socket(
             socket.AF_INET,
             socket.SOCK_DGRAM,
@@ -153,6 +152,13 @@ class UDPTransport:
             socket.SO_REUSEADDR,
             1,
         )
+
+        # On Windows: disable SIO_UDP_CONNRESET so ICMP Port Unreachable does not crash recvfrom with WinError 10054
+        if hasattr(socket, "SIO_UDP_CONNRESET"):
+            try:
+                self._rx_socket.ioctl(socket.SIO_UDP_CONNRESET, False)
+            except Exception:
+                pass
 
         self._rx_socket.settimeout(
             self.config.timeout
@@ -172,11 +178,16 @@ class UDPTransport:
 
     def _create_tx_socket(self) -> None:
         """Create UDP transmit socket."""
-
         self._tx_socket = socket.socket(
             socket.AF_INET,
             socket.SOCK_DGRAM,
         )
+
+        if hasattr(socket, "SIO_UDP_CONNRESET"):
+            try:
+                self._tx_socket.ioctl(socket.SIO_UDP_CONNRESET, False)
+            except Exception:
+                pass
 
         print(
             f"[UDP TX] Ready -> "
@@ -189,11 +200,9 @@ class UDPTransport:
 
     def _receive_loop(self) -> None:
         """Background UDP receive loop."""
-
         print("[UDP RX] Receive thread started")
 
         while self._running:
-
             if self._rx_socket is None:
                 break
 
@@ -201,19 +210,19 @@ class UDPTransport:
                 data, address = self._rx_socket.recvfrom(
                     self.config.recv_buffer_size
                 )
-
             except socket.timeout:
                 continue
-
+            except ConnectionResetError:
+                # Windows 10054 ICMP port unreachable is expected in UDP when simulator shifts ports - ignore and keep receiving!
+                continue
             except OSError as exc:
-
-                if self._running:
-                    print(f"[UDP RX ERROR] {exc}")
-
-                break
-
+                if not self._running:
+                    break
+                # Do not kill thread on transient OS errors
+                continue
             except Exception as exc:
-
+                if not self._running:
+                    break
                 print(f"[UDP RX ERROR] {exc}")
                 continue
 
@@ -226,14 +235,10 @@ class UDPTransport:
                 self._rx_bytes += len(data)
 
             if self.on_data is not None:
-
                 try:
                     self.on_data(data, address)
-
                 except Exception as exc:
-                    print(
-                        f"[UDP CALLBACK ERROR] {exc}"
-                    )
+                    print(f"[UDP CALLBACK ERROR] {exc}")
 
     # ==========================================================
     # SEND
@@ -247,45 +252,40 @@ class UDPTransport:
     ) -> bool:
         """
         Send raw UDP bytes.
-
-        If host/port are omitted, configured TX endpoint
-        is used.
+        Uses the primary bound RX socket or TX socket to ensure NAT and return-path compatibility with simulators.
         """
+        if not self._running:
+            return False
 
-        if self._tx_socket is None:
-            print("[UDP TX ERROR] TX socket is not available")
+        sock = self._rx_socket or self._tx_socket
+        if sock is None:
             return False
 
         if not isinstance(data, bytes):
             raise TypeError("UDPTransport.send() requires bytes")
 
+        success = False
+
+        # 1. If we have the exact peer address from incoming packets, send directly through the same bound socket!
+        if host is None and port is None and self._last_rx_address is not None:
+            try:
+                sent = sock.sendto(data, self._last_rx_address)
+                if sent == len(data):
+                    success = True
+            except OSError:
+                pass
+
+        # 2. Also send to configured TX endpoint
         target_host = host or self.config.tx_host
         target_port = port or self.config.tx_port
 
-        success = False
-        try:
-            sent = self._tx_socket.sendto(
-                data,
-                (
-                    target_host,
-                    target_port,
-                ),
-            )
-            if sent == len(data):
-                success = True
-        except OSError:
-            pass
-
-        # Also send to the source address of the last received UDP packet (NAT / SITL return path)
-        if host is None and port is None and self._last_rx_address is not None:
-            peer_host, peer_port = self._last_rx_address
-            if (peer_host, peer_port) != (target_host, target_port):
-                try:
-                    sent_peer = self._tx_socket.sendto(data, (peer_host, peer_port))
-                    if sent_peer == len(data):
-                        success = True
-                except OSError:
-                    pass
+        if (target_host, target_port) != self._last_rx_address:
+            try:
+                sent = sock.sendto(data, (target_host, target_port))
+                if sent == len(data):
+                    success = True
+            except OSError:
+                pass
 
         if success:
             with self._lock:

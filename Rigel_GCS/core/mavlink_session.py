@@ -243,6 +243,12 @@ class MAVLinkSession:
             sysid = None
             compid = None
 
+        if sysid is not None and sysid > 0:
+            self.last_message_time = time.monotonic()
+            if self.target_system is None:
+                self.target_system = sysid
+                self.target_component = compid
+
         # ------------------------------------------------------
         # HEARTBEAT
         # ------------------------------------------------------
@@ -311,18 +317,16 @@ class MAVLinkSession:
 
     @property
     def seconds_since_heartbeat(self) -> Optional[float]:
-
-        if self.last_heartbeat_time is None:
+        t_hb = self.last_heartbeat_time
+        t_msg = getattr(self, "last_message_time", None)
+        valid = [t for t in (t_hb, t_msg) if t is not None]
+        if not valid:
             return None
-
-        return (
-            time.monotonic()
-            - self.last_heartbeat_time
-        )
+        return time.monotonic() - max(valid)
 
     def heartbeat_alive(
         self,
-        timeout: float = 3.0,
+        timeout: float = 6.0,
     ) -> bool:
 
         elapsed = self.seconds_since_heartbeat

@@ -35,6 +35,10 @@ except Exception:  # pragma: no cover - serial is optional at UI import time
 
 from Rigel_GCS.core.telemetry_logger import TelemetryLogger
 from Rigel_GCS.ui.controls.flight_control_panel import FlightControlPanel
+from Rigel_GCS.ui.flight_data.camera_feed import CameraFeedWidget
+from Rigel_GCS.ui.flight_data.safety_banner import SafetyBannerWidget
+from Rigel_GCS.ui.flight_data.status_console import StatusConsoleWidget
+from Rigel_GCS.ui.flight_data.telemetry_cards import TelemetryCardsWidget
 from Rigel_GCS.ui.map.map_widget import MapWidget
 from Rigel_GCS.ui.mission.mission_panel import MissionPanel
 from Rigel_GCS.ui.vehicle_panel.vehicle_panel import VehiclePanel
@@ -61,14 +65,15 @@ class ValueLabel(QLabel):
 class MainWindow(QMainWindow):
     """RIGEL GCS main window.
 
-    Layout intentionally follows a Mission-Planner-like concept:
-
-        LEFT  = connection/device/telemetry information
-        RIGHT = reserved for map + basic vehicle controls
-
-    The right area is deliberately a placeholder so it can later be
-    replaced by the mission map and command panels without redesigning
-    the telemetry/device architecture.
+    Layout Architecture:
+        TOPBAR: Brand logo + Navigation Tabs + Inline Link/Connection Controls + Active Drone Selector
+        TAB 1 (FLIGHT DATA):
+            - LEFT: Real-time 60 FPS HUD + Safety Alert Banner + FPV / Camera Feed Slot
+            - CENTER: Tactical Map + Real-time MAVLink Status Console
+            - RIGHT: Cockpit Telemetry Cards (Battery, GPS, Dynamics) + Vehicle State & Health
+        TAB 2 (MISSION PLANNER):
+            - LEFT: Interactive Mission Map (Waypoint click creation)
+            - RIGHT: Mission / Waypoint Editor & Waypoint Upload/Download Panel
     """
 
     POLL_MS = 250
@@ -81,13 +86,16 @@ class MainWindow(QMainWindow):
         self._updating_devices = False
         self.logger = TelemetryLogger()
 
-        self.setWindowTitle("RIGEL Ground Station")
-        self.resize(1400, 850)
-        self.setMinimumSize(820, 520)
+        self.setWindowTitle("RIGEL Ground Station - UAV Cockpit")
+        self.resize(1440, 880)
+        self.setMinimumSize(960, 600)
 
         self._build_ui()
         self._apply_style()
         self._refresh_serial_ports()
+
+        # Connect live MAVLink message hook (for STATUSTEXT console)
+        self.connection_manager.on_message = self._on_mavlink_message_received
 
         # ============================================================
         # SLOW UI TIMER
@@ -117,50 +125,46 @@ class MainWindow(QMainWindow):
         main_layout.setContentsMargins(6, 6, 6, 6)
         main_layout.setSpacing(6)
 
-        # Top-level Tabs
+        # 1. Main Stacked Tabs
         self.main_tabs = QTabWidget()
-        self.main_tabs.setStyleSheet("""
-            QTabBar::tab {
-                font-weight: bold;
-                font-size: 13px;
-                padding: 8px 24px;
-                margin-right: 4px;
-            }
-            QTabBar::tab:selected {
-                background: #0284c7;
-                color: white;
-                border-radius: 4px;
-            }
-            QTabBar::tab:!selected {
-                background: #1e293b;
-                color: #94a3b8;
-                border-radius: 4px;
-            }
-        """)
+        self.main_tabs.tabBar().hide()  # Navigation controlled via TopBar buttons
+        self.main_tabs.setStyleSheet("QTabWidget::pane { border: 0; background: transparent; }")
+
+        # 2. Sleek Top Bar with Navigation, Connection, and Active Drone
+        topbar = self._build_topbar()
+        main_layout.addWidget(topbar)
+        main_layout.addWidget(self.main_tabs)
 
         # ========================================================
         # TAB 1: 📊 DATA (FLIGHT DATA & LIVE MONITORING)
         # ========================================================
         tab_data = QWidget()
         data_layout = QHBoxLayout(tab_data)
-        data_layout.setContentsMargins(0, 4, 0, 0)
+        data_layout.setContentsMargins(0, 2, 0, 0)
         data_layout.setSpacing(8)
 
         data_splitter = QSplitter(Qt.Horizontal)
         data_splitter.setChildrenCollapsible(False)
 
-        # Left Sidebar (Connection, Active Drone, HUD, Telemetry Table)
+        # Left Sidebar (Vehicle HUD + Safety Banner + Camera Feed)
         sidebar = QWidget()
-        sidebar.setMinimumWidth(285)
-        sidebar.setMaximumWidth(420)
+        sidebar.setMinimumWidth(290)
+        sidebar.setMaximumWidth(380)
         side = QVBoxLayout(sidebar)
         side.setContentsMargins(0, 0, 0, 0)
-        side.setSpacing(7)
+        side.setSpacing(8)
 
-        side.addWidget(self._build_connection_box())
-        side.addWidget(self._build_vehicle_selector())
+        # Primary Flight Display / HUD
         side.addWidget(self._build_hud_box())
-        side.addWidget(self._build_telemetry_box())
+
+        # Safety Alert Banner
+        self.safety_banner = SafetyBannerWidget()
+        side.addWidget(self.safety_banner)
+
+        # Dedicated FPV / Camera Video Feed Slot
+        self.camera_feed = CameraFeedWidget()
+        side.addWidget(self.camera_feed)
+        side.addStretch(1)
 
         sidebar_scroll = QScrollArea()
         sidebar_scroll.setWidgetResizable(True)
@@ -169,33 +173,60 @@ class MainWindow(QMainWindow):
         sidebar_scroll.setWidget(sidebar)
         data_splitter.addWidget(sidebar_scroll)
 
-        # Center/Right of Tab 1: Live Flight Map + Quick Flight Controls
+        # Center/Right of Tab 1: Map + Status Console (Center) and Cockpit Cards + Status (Right)
         data_center_splitter = QSplitter(Qt.Horizontal)
         data_center_splitter.setChildrenCollapsible(False)
 
-        # Live Map (Read-only waypoint mode: enable_waypoint_click=False)
-        self.data_map = MapWidget(enable_waypoint_click=False)
-        data_center_splitter.addWidget(self.data_map)
+        # Center Column: Tactical Map (Top) + MAVLink Status Console (Bottom)
+        center_container = QWidget()
+        center_layout = QVBoxLayout(center_container)
+        center_layout.setContentsMargins(0, 0, 0, 0)
+        center_layout.setSpacing(6)
 
-        # Flight Controls Panel (Right column of Data tab)
+        self.data_map = MapWidget(enable_waypoint_click=False)
+        center_layout.addWidget(self.data_map, 1)
+
+        self.status_console = StatusConsoleWidget()
+        center_layout.addWidget(self.status_console)
+
+        data_center_splitter.addWidget(center_container)
+
+        # Right Column: Cockpit Telemetry Cards (Top) + Vehicle Safety Status Panel (Bottom)
+        right_sidebar = QWidget()
+        right_sidebar.setMinimumWidth(290)
+        right_sidebar.setMaximumWidth(360)
+        right_layout = QVBoxLayout(right_sidebar)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(8)
+
+        self.telemetry_cards = TelemetryCardsWidget()
+        right_layout.addWidget(self.telemetry_cards)
+
         self.flight_controls = FlightControlPanel(self.connection_manager)
-        self.flight_controls.setMinimumWidth(300)
-        self.flight_controls.setMaximumWidth(380)
-        data_center_splitter.addWidget(self.flight_controls)
-        data_center_splitter.setSizes([850, 320])
+        right_layout.addWidget(self.flight_controls)
+        right_layout.addStretch(1)
+
+        right_scroll = QScrollArea()
+        right_scroll.setWidgetResizable(True)
+        right_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        right_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        right_scroll.setWidget(right_sidebar)
+
+        data_center_splitter.addWidget(right_scroll)
+        data_center_splitter.setSizes([850, 310])
 
         data_splitter.addWidget(data_center_splitter)
-        data_splitter.setSizes([340, 1100])
+        data_splitter.setSizes([320, 1120])
         data_layout.addWidget(data_splitter)
 
-        self.main_tabs.addTab(tab_data, "📊 DATA (FLIGHT DATA)")
+        self.main_tabs.addTab(tab_data, "FLIGHT DATA")
 
         # ========================================================
         # TAB 2: 📍 MISSION (MISSION PLANNER & WAYPOINT EDITOR)
         # ========================================================
         tab_mission = QWidget()
         mission_layout = QHBoxLayout(tab_mission)
-        mission_layout.setContentsMargins(0, 4, 0, 0)
+        mission_layout.setContentsMargins(0, 2, 0, 0)
         mission_layout.setSpacing(8)
 
         mission_splitter = QSplitter(Qt.Horizontal)
@@ -207,15 +238,13 @@ class MainWindow(QMainWindow):
 
         # Mission Planner Panel (Right side of Mission tab)
         self.mission_panel = MissionPanel(self.connection_manager)
-        self.mission_panel.setMinimumWidth(380)
-        self.mission_panel.setMaximumWidth(520)
+        self.mission_panel.setMinimumWidth(360)
+        self.mission_panel.setMaximumWidth(480)
         mission_splitter.addWidget(self.mission_panel)
-        mission_splitter.setSizes([950, 450])
+        mission_splitter.setSizes([960, 440])
 
         mission_layout.addWidget(mission_splitter)
         self.main_tabs.addTab(tab_mission, "📍 MISSION (PLANNER)")
-
-        main_layout.addWidget(self.main_tabs)
 
         # Connect Waypoint signals:
         # 1. Clicking on Mission Map adds a Waypoint in Mission Panel
@@ -227,75 +256,271 @@ class MainWindow(QMainWindow):
 
         self.workspace_status = QLabel("Ready")
 
-    def _build_connection_box(self) -> QGroupBox:
-        box = QGroupBox("LINK / CONNECTION")
-        layout = QVBoxLayout(box)
-        layout.setSpacing(6)
+    def _build_topbar(self) -> QWidget:
+        bar = QFrame()
+        bar.setObjectName("topBar")
+        bar.setStyleSheet("""
+            QFrame#topBar {
+                background: #0b1329;
+                border: 1px solid #1e293b;
+                border-radius: 6px;
+                padding: 2px 4px;
+            }
+        """)
+        layout = QHBoxLayout(bar)
+        layout.setContentsMargins(8, 4, 8, 4)
+        layout.setSpacing(10)
 
-        row = QHBoxLayout()
+        # 1. Logo / Title
+        brand_layout = QHBoxLayout()
+        brand_layout.setSpacing(6)
+        logo_icon = QLabel("🚀")
+        logo_icon.setFont(QFont("Segoe UI", 12))
+        brand_title = QLabel("RIGEL GCS")
+        brand_title.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
+        brand_title.setStyleSheet("color: #38bdf8; letter-spacing: 1px;")
+        brand_layout.addWidget(logo_icon)
+        brand_layout.addWidget(brand_title)
+        layout.addLayout(brand_layout)
+
+        # Separator
+        sep1 = QFrame()
+        sep1.setFrameShape(QFrame.Shape.VLine)
+        sep1.setStyleSheet("color: #334155;")
+        layout.addWidget(sep1)
+
+        # 2. Main Tab Switcher Buttons
+        self.btn_tab_data = QPushButton("📊 FLIGHT DATA")
+        self.btn_tab_mission = QPushButton("📍 MISSION PLANNER")
+        for btn in (self.btn_tab_data, self.btn_tab_mission):
+            btn.setFixedHeight(28)
+            btn.setCursor(Qt.PointingHandCursor)
+
+        self.btn_tab_data.clicked.connect(lambda: self._switch_main_tab(0))
+        self.btn_tab_mission.clicked.connect(lambda: self._switch_main_tab(1))
+
+        tab_btn_layout = QHBoxLayout()
+        tab_btn_layout.setSpacing(4)
+        tab_btn_layout.addWidget(self.btn_tab_data)
+        tab_btn_layout.addWidget(self.btn_tab_mission)
+        layout.addLayout(tab_btn_layout)
+
+        layout.addStretch(1)
+
+        # Separator
+        sep2 = QFrame()
+        sep2.setFrameShape(QFrame.Shape.VLine)
+        sep2.setStyleSheet("color: #334155;")
+        layout.addWidget(sep2)
+
+        # 3. Inline Connection Controls
+        link_container = QWidget()
+        link_layout = QHBoxLayout(link_container)
+        link_layout.setContentsMargins(0, 0, 0, 0)
+        link_layout.setSpacing(6)
+
+        link_lbl = QLabel("LINK:")
+        link_lbl.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
+        link_lbl.setStyleSheet("color: #64748b;")
+        link_layout.addWidget(link_lbl)
+
         self.transport_combo = QComboBox()
-        self.transport_combo.addItems(["SERIAL", "UDP"])
+        self.transport_combo.addItems(["UDP", "SERIAL"])
+        self.transport_combo.setFixedHeight(26)
         self.transport_combo.currentTextChanged.connect(self._on_transport_changed)
-        row.addWidget(QLabel("Transport"))
-        row.addWidget(self.transport_combo, 1)
-        layout.addLayout(row)
+        link_layout.addWidget(self.transport_combo)
 
-        self.serial_widget = QWidget()
-        serial_layout = QGridLayout(self.serial_widget)
-        serial_layout.setContentsMargins(0, 0, 0, 0)
-        serial_layout.addWidget(QLabel("COM"), 0, 0)
-        self.com_combo = QComboBox()
-        self.com_combo.setEditable(True)
-        serial_layout.addWidget(self.com_combo, 0, 1)
-        serial_layout.addWidget(QLabel("Baud"), 1, 0)
-        self.baud_spin = NoWheelSpinBox()
-        self.baud_spin.setRange(1200, 2000000)
-        self.baud_spin.setValue(115200)
-        serial_layout.addWidget(self.baud_spin, 1, 1)
-        self.refresh_com_button = QPushButton("Refresh")
-        self.refresh_com_button.clicked.connect(self._refresh_serial_ports)
-        serial_layout.addWidget(self.refresh_com_button, 2, 0, 1, 2)
-        layout.addWidget(self.serial_widget)
-
+        # UDP parameters widget
         self.udp_widget = QWidget()
-        udp_layout = QGridLayout(self.udp_widget)
-        udp_layout.setContentsMargins(0, 0, 0, 0)
-        udp_layout.addWidget(QLabel("RX host"), 0, 0)
-        self.udp_rx_host = QLineEdit("0.0.0.0")
-        udp_layout.addWidget(self.udp_rx_host, 0, 1)
-        udp_layout.addWidget(QLabel("RX port"), 1, 0)
+        udp_l = QHBoxLayout(self.udp_widget)
+        udp_l.setContentsMargins(0, 0, 0, 0)
+        udp_l.setSpacing(4)
+
+        lbl_rx = QLabel("RX:")
+        lbl_rx.setStyleSheet("color: #94a3b8; font-size: 11px;")
         self.udp_rx_port = NoWheelSpinBox()
         self.udp_rx_port.setRange(1, 65535)
         self.udp_rx_port.setValue(14550)
-        udp_layout.addWidget(self.udp_rx_port, 1, 1)
-        udp_layout.addWidget(QLabel("TX host"), 2, 0)
+        self.udp_rx_port.setFixedHeight(26)
+        self.udp_rx_port.setToolTip("GCS Listening (RX) Port")
+        self.udp_rx_host = QLineEdit("0.0.0.0")
+
+        lbl_tx = QLabel("TX:")
+        lbl_tx.setStyleSheet("color: #94a3b8; font-size: 11px;")
         self.udp_tx_host = QLineEdit("127.0.0.1")
-        udp_layout.addWidget(self.udp_tx_host, 2, 1)
-        udp_layout.addWidget(QLabel("TX port"), 3, 0)
+        self.udp_tx_host.setFixedWidth(85)
+        self.udp_tx_host.setFixedHeight(26)
+        self.udp_tx_host.setToolTip("Target Drone TX Host")
+
         self.udp_tx_port = NoWheelSpinBox()
         self.udp_tx_port.setRange(1, 65535)
-        self.udp_tx_port.setValue(14560)
-        udp_layout.addWidget(self.udp_tx_port, 3, 1)
-        layout.addWidget(self.udp_widget)
-        self.udp_widget.hide()
+        self.udp_tx_port.setValue(14551)
+        self.udp_tx_port.setFixedHeight(26)
+        self.udp_tx_port.setToolTip("Target Drone TX Port")
 
-        buttons = QHBoxLayout()
-        self.connect_button = QPushButton("Connect")
+        udp_l.addWidget(lbl_rx)
+        udp_l.addWidget(self.udp_rx_port)
+        udp_l.addWidget(lbl_tx)
+        udp_l.addWidget(self.udp_tx_host)
+        udp_l.addWidget(self.udp_tx_port)
+        link_layout.addWidget(self.udp_widget)
+
+        # Serial parameters widget
+        self.serial_widget = QWidget()
+        ser_l = QHBoxLayout(self.serial_widget)
+        ser_l.setContentsMargins(0, 0, 0, 0)
+        ser_l.setSpacing(4)
+
+        self.com_combo = QComboBox()
+        self.com_combo.setEditable(True)
+        self.com_combo.setFixedWidth(85)
+        self.com_combo.setFixedHeight(26)
+
+        self.refresh_com_button = QPushButton("🔄")
+        self.refresh_com_button.setFixedSize(26, 26)
+        self.refresh_com_button.setToolTip("Refresh COM Ports")
+        self.refresh_com_button.clicked.connect(self._refresh_serial_ports)
+
+        self.baud_spin = NoWheelSpinBox()
+        self.baud_spin.setRange(1200, 2000000)
+        self.baud_spin.setValue(115200)
+        self.baud_spin.setFixedHeight(26)
+        self.baud_spin.setToolTip("Baudrate")
+
+        ser_l.addWidget(self.com_combo)
+        ser_l.addWidget(self.refresh_com_button)
+        ser_l.addWidget(self.baud_spin)
+        link_layout.addWidget(self.serial_widget)
+        self.serial_widget.hide()
+
+        # Connect / Disconnect Buttons
+        self.connect_button = QPushButton("⚡ Connect")
+        self.connect_button.setFixedHeight(26)
+        self.connect_button.setStyleSheet("""
+            QPushButton {
+                background: #059669;
+                color: white;
+                font-weight: bold;
+                border: none;
+                border-radius: 4px;
+                padding: 0 10px;
+            }
+            QPushButton:hover {
+                background: #10b981;
+            }
+        """)
         self.connect_button.clicked.connect(self._connect)
-        self.disconnect_button = QPushButton("Disconnect")
-        self.disconnect_button.clicked.connect(self._disconnect)
-        buttons.addWidget(self.connect_button)
-        buttons.addWidget(self.disconnect_button)
-        layout.addLayout(buttons)
+        link_layout.addWidget(self.connect_button)
 
-        self.connection_status = QLabel("DISCONNECTED")
+        self.disconnect_button = QPushButton("Disconnect")
+        self.disconnect_button.setFixedHeight(26)
+        self.disconnect_button.setStyleSheet("""
+            QPushButton {
+                background: #1e293b;
+                color: #cbd5e1;
+                border: 1px solid #475569;
+                border-radius: 4px;
+                padding: 0 8px;
+            }
+            QPushButton:hover {
+                background: #ef4444;
+                color: white;
+                border-color: #ef4444;
+            }
+        """)
+        self.disconnect_button.clicked.connect(self._disconnect)
+        link_layout.addWidget(self.disconnect_button)
+
+        self.connection_status = QLabel("● DISCONNECTED")
         self.connection_status.setObjectName("connectionStatus")
-        self.connection_status.setAlignment(Qt.AlignCenter)
-        layout.addWidget(self.connection_status)
-        return box
+        self.connection_status.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+        self.connection_status.setStyleSheet("color: #ef4444; padding: 0 4px;")
+        link_layout.addWidget(self.connection_status)
+
+        layout.addWidget(link_container)
+
+        # Separator
+        sep3 = QFrame()
+        sep3.setFrameShape(QFrame.Shape.VLine)
+        sep3.setStyleSheet("color: #334155;")
+        layout.addWidget(sep3)
+
+        # 4. Active Drone Selector
+        drone_container = QWidget()
+        d_layout = QHBoxLayout(drone_container)
+        d_layout.setContentsMargins(0, 0, 0, 0)
+        d_layout.setSpacing(4)
+
+        d_lbl = QLabel("🛸 DRONE:")
+        d_lbl.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
+        d_lbl.setStyleSheet("color: #64748b;")
+        d_layout.addWidget(d_lbl)
+
+        self.device_combo = QComboBox()
+        self.device_combo.setFixedHeight(26)
+        self.device_combo.setMinimumWidth(125)
+        self.device_combo.addItem("No drone detected", None)
+        self.device_combo.currentIndexChanged.connect(self._on_device_combo_changed)
+        d_layout.addWidget(self.device_combo)
+
+        layout.addWidget(drone_container)
+
+        self._switch_main_tab(0)
+        return bar
+
+    def _switch_main_tab(self, index: int) -> None:
+        self.main_tabs.setCurrentIndex(index)
+        if index == 0:
+            self.btn_tab_data.setStyleSheet("""
+                QPushButton {
+                    background: #0284c7;
+                    color: white;
+                    font-weight: bold;
+                    border: 1px solid #38bdf8;
+                    border-radius: 4px;
+                    padding: 0 14px;
+                }
+            """)
+            self.btn_tab_mission.setStyleSheet("""
+                QPushButton {
+                    background: #1e293b;
+                    color: #94a3b8;
+                    border: 1px solid #334155;
+                    border-radius: 4px;
+                    padding: 0 14px;
+                }
+                QPushButton:hover {
+                    background: #334155;
+                    color: #e2e8f0;
+                }
+            """)
+        else:
+            self.btn_tab_data.setStyleSheet("""
+                QPushButton {
+                    background: #1e293b;
+                    color: #94a3b8;
+                    border: 1px solid #334155;
+                    border-radius: 4px;
+                    padding: 0 14px;
+                }
+                QPushButton:hover {
+                    background: #334155;
+                    color: #e2e8f0;
+                }
+            """)
+            self.btn_tab_mission.setStyleSheet("""
+                QPushButton {
+                    background: #0284c7;
+                    color: white;
+                    font-weight: bold;
+                    border: 1px solid #38bdf8;
+                    border-radius: 4px;
+                    padding: 0 14px;
+                }
+            """)
 
     def _build_hud_box(self) -> QGroupBox:
-        box = QGroupBox("VEHICLE HUD")
+        box = QGroupBox("PRIMARY FLIGHT DISPLAY (HUD)")
         layout = QVBoxLayout(box)
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(4)
@@ -303,88 +528,6 @@ class MainWindow(QMainWindow):
         self.hud.setMinimumWidth(250)
         self.hud.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         layout.addWidget(self.hud)
-        return box
-
-    def _build_vehicle_selector(self) -> QGroupBox:
-        box = QGroupBox("ACTIVE DRONE")
-        layout = QVBoxLayout(box)
-        layout.setContentsMargins(6, 6, 6, 6)
-        layout.setSpacing(4)
-
-        self.device_combo = QComboBox()
-        self.device_combo.addItem("No drone detected", None)
-        self.device_combo.currentIndexChanged.connect(self._on_device_combo_changed)
-        layout.addWidget(self.device_combo)
-        return box
-
-    def _build_telemetry_box(self) -> QGroupBox:
-        box = QGroupBox("SELECTED VEHICLE")
-        layout = QVBoxLayout(box)
-        layout.setSpacing(3)
-
-        self.selected_title = QLabel("No vehicle selected")
-        self.selected_title.setObjectName("selectedTitle")
-        layout.addWidget(self.selected_title)
-
-        self.selected_link = QLabel("--")
-        self.selected_link.setObjectName("selectedLink")
-        layout.addWidget(self.selected_link)
-
-        grid = QGridLayout()
-        grid.setHorizontalSpacing(10)
-        grid.setVerticalSpacing(3)
-        self.telemetry_values: dict[str, ValueLabel] = {}
-
-        sections = [
-            ("POSITION", [
-                ("Latitude", "latitude", "{}", "deg"),
-                ("Longitude", "longitude", "{}", "deg"),
-                ("Altitude", "altitude", "{}", "m"),
-                ("Rel. Alt", "relative_altitude", "{}", "m"),
-                ("Ground Speed", "ground_speed", "{}", "m/s"),
-                ("Heading", "heading", "{}", "deg"),
-            ]),
-            ("GPS", [
-                ("Fix", "fix_type", "{}", ""),
-                ("Satellites", "satellites_visible", "{}", ""),
-            ]),
-            ("ATTITUDE", [
-                ("Roll", "roll", "{}", "rad"),
-                ("Pitch", "pitch", "{}", "rad"),
-                ("Yaw", "yaw", "{}", "rad"),
-            ]),
-            ("BATTERY", [
-                ("Voltage", "voltage_battery", "{}", "V"),
-                ("Current", "current_battery", "{}", "A"),
-                ("Battery", "battery_remaining", "{}", "%"),
-            ]),
-            ("SYSTEM", [
-                ("Armed", "armed", "{}", ""),
-                ("Mode", "custom_mode", "{}", ""),
-                ("MAV type", "mav_type", "{}", ""),
-                ("Autopilot", "autopilot", "{}", ""),
-            ]),
-        ]
-
-        row = 0
-        for section_name, fields in sections:
-            label = QLabel(section_name)
-            label.setObjectName("telemetrySection")
-            grid.addWidget(label, row, 0, 1, 3)
-            row += 1
-            for title, attr, _fmt, unit in fields:
-                grid.addWidget(QLabel(title), row, 0)
-                value = ValueLabel()
-                self.telemetry_values[attr] = value
-                grid.addWidget(value, row, 1)
-                grid.addWidget(QLabel(unit), row, 2)
-                row += 1
-
-        layout.addLayout(grid)
-
-        self.last_update_label = QLabel("Last telemetry: --")
-        self.last_update_label.setObjectName("lastUpdate")
-        layout.addWidget(self.last_update_label)
         return box
 
     # ============================================================
@@ -441,17 +584,27 @@ class MainWindow(QMainWindow):
         self.data_map.update_uav_telemetry(state)
         self.mission_map.update_uav_telemetry(state)
         self.flight_controls.update_telemetry(state)
+        self.telemetry_cards.update_telemetry(state)
+        self.safety_banner.update_state(state)
         self.mission_panel.update_telemetry(state)
         self.logger.log_state(state)
-
 
     def _refresh_runtime(self) -> None:
         self._refresh_connection_status()
         self._refresh_devices()
 
     def _refresh_connection_status(self) -> None:
-        state = getattr(self.connection_manager.state, "value", str(self.connection_manager.state))
-        self.connection_status.setText(str(state).upper())
+        raw_state = getattr(self.connection_manager.state, "value", str(self.connection_manager.state))
+        state_str = str(raw_state).upper()
+        if "CONNECTED" in state_str and "DIS" not in state_str:
+            self.connection_status.setText(f"● {state_str}")
+            self.connection_status.setStyleSheet("color: #10b981; font-weight: bold;")
+        elif "CONNECTING" in state_str or "LISTEN" in state_str:
+            self.connection_status.setText(f"● {state_str}")
+            self.connection_status.setStyleSheet("color: #f59e0b; font-weight: bold;")
+        else:
+            self.connection_status.setText(f"● {state_str}")
+            self.connection_status.setStyleSheet("color: #ef4444; font-weight: bold;")
 
     def _refresh_devices(self) -> None:
         devices = self.connection_manager.get_devices()
@@ -508,46 +661,38 @@ class MainWindow(QMainWindow):
 
         transport, sysid, compid = self.selected_key
         state = self.connection_manager.get_telemetry(sysid, compid, transport)
-        device = self.connection_manager.get_device(sysid, compid, transport)
         if state is None:
             return
 
-        self.selected_title.setText(f"Drone ID: {sysid}")
         self.hud.update_telemetry(state)
         self.flight_controls.set_active_vehicle(self.selected_key)
         self.mission_panel.set_active_vehicle(self.selected_key)
         self.flight_controls.update_telemetry(state)
+        self.telemetry_cards.update_telemetry(state)
+        self.safety_banner.update_state(state)
         self.mission_panel.update_telemetry(state)
         self.data_map.update_uav_telemetry(state)
         self.mission_map.update_uav_telemetry(state)
 
-        rx = getattr(state, "rx_endpoint", None) or getattr(device, "rx_endpoint", None) or "--"
-        tx = getattr(state, "tx_endpoint", None) or getattr(device, "tx_endpoint", None) or "--"
-        self.selected_link.setText(f"Port: {transport}   |   RX: {rx}")
-        self.workspace_status.setText(f"Active vehicle: Drone ID {sysid}")
-
-        for attr, label in self.telemetry_values.items():
-            value = getattr(state, attr, None)
-            label.setText(self._format_value(attr, value))
-
-        last_update = getattr(state, "last_update", None)
-        if last_update is None:
-            self.last_update_label.setText("Last telemetry: --")
-        else:
-            # last_update is monotonic time; calculate age instead of displaying it.
-            import time
-            age = max(0.0, time.monotonic() - last_update)
-            self.last_update_label.setText(f"Last telemetry: {age:.1f}s ago")
+    def _on_mavlink_message_received(self, message, device=None) -> None:
+        try:
+            msg_type = message.get_type()
+            if msg_type == "STATUSTEXT":
+                text = getattr(message, "text", "")
+                if isinstance(text, bytes):
+                    text = text.decode("utf-8", errors="ignore")
+                elif not isinstance(text, str):
+                    text = str(text)
+                severity = getattr(message, "severity", 6)
+                self.status_console.add_message(text, severity)
+        except Exception:
+            pass
 
     def _clear_telemetry(self) -> None:
-        self.selected_title.setText("No vehicle selected")
-        self.selected_link.setText("--")
-        self.workspace_status.setText("No active vehicle")
         self.flight_controls.set_active_vehicle(None)
         self.mission_panel.set_active_vehicle(None)
-        for label in self.telemetry_values.values():
-            label.setText("--")
-        self.last_update_label.setText("Last telemetry: --")
+        self.telemetry_cards.update_telemetry(None)
+        self.safety_banner.update_state(None)
 
     @staticmethod
     def _format_value(attr: str, value) -> str:
@@ -611,59 +756,70 @@ class MainWindow(QMainWindow):
     def _apply_style(self) -> None:
         self.setStyleSheet(
             """
-            QMainWindow, QWidget {
-                font-family: Segoe UI, Arial, sans-serif;
+            QMainWindow {
+                background: #020617;
+                color: #e2e8f0;
+                font-family: Segoe UI, -apple-system, sans-serif;
+                font-size: 12px;
+            }
+            QWidget {
+                color: #e2e8f0;
+                font-family: Segoe UI, -apple-system, sans-serif;
                 font-size: 12px;
             }
             QGroupBox {
-                font-weight: 600;
-                margin-top: 8px;
-                padding-top: 8px;
+                background: #090e1f;
+                border: 1px solid #1e293b;
+                border-radius: 6px;
+                font-weight: 700;
+                font-size: 11px;
+                color: #38bdf8;
+                margin-top: 10px;
+                padding-top: 10px;
             }
             QGroupBox::title {
                 subcontrol-origin: margin;
-                left: 8px;
-                padding: 0 4px;
+                left: 10px;
+                padding: 0 6px;
+                background: #090e1f;
             }
-            QListWidget {
-                min-height: 70px;
+            QComboBox, QSpinBox, QLineEdit {
+                background: #0f172a;
+                color: #f1f5f9;
+                border: 1px solid #334155;
+                border-radius: 4px;
+                padding: 2px 6px;
+                selection-background-color: #0284c7;
+            }
+            QComboBox:hover, QSpinBox:hover, QLineEdit:hover {
+                border-color: #0284c7;
+            }
+            QComboBox::drop-down {
+                border: none;
+                width: 18px;
+            }
+            QComboBox QAbstractItemView {
+                background: #0f172a;
+                color: #f1f5f9;
+                border: 1px solid #334155;
+                selection-background-color: #0284c7;
             }
             QScrollArea {
                 border: none;
+                background: transparent;
             }
-            QAbstractSpinBox {
-                min-height: 26px;
+            QScrollBar:vertical {
+                background: #090e1f;
+                width: 6px;
+                margin: 0;
             }
-            QListWidget::item {
-                padding: 7px;
+            QScrollBar::handle:vertical {
+                background: #334155;
+                min-height: 20px;
+                border-radius: 3px;
             }
-            QLabel#selectedTitle {
-                font-size: 14px;
-                font-weight: 700;
-            }
-            QLabel#selectedLink, QLabel#lastUpdate, QLabel#workspaceHint {
-                color: #6b7280;
-            }
-            QLabel#telemetrySection {
-                font-weight: 700;
-                margin-top: 5px;
-            }
-            QLabel#connectionStatus {
-                font-weight: 700;
-                padding: 4px;
-            }
-            QFrame#workspace {
-                border: 1px solid #cfd4dc;
-                border-radius: 4px;
-            }
-            QLabel#workspaceTitle {
-                font-size: 18px;
-                font-weight: 700;
-                margin-top: 30px;
-            }
-            QLabel#workspaceStatus {
-                font-weight: 600;
-                margin-bottom: 30px;
+            QScrollBar::handle:vertical:hover {
+                background: #0284c7;
             }
             """
         )

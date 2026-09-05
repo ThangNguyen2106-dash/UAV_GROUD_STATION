@@ -13,186 +13,93 @@ from .flight_status import FlightStatus
 
 
 class HUDWidget(QFrame):
-    """Main left-side HUD.
-
-    TelemetryState receives MAVLink ATTITUDE roll/pitch in radians.
-    The ArtificialHorizon uses degrees, so conversion is performed here
-    at the UI boundary.
-    """
+    """Compact Primary Flight Display (Artificial Horizon + Compass Tape)."""
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
 
         self.setObjectName("HUDWidget")
         self.setFrameShape(QFrame.Shape.StyledPanel)
-        self.setMinimumWidth(300)
+        self.setStyleSheet("""
+            QFrame#HUDWidget {
+                background: #020617;
+                border: 1px solid #1e293b;
+                border-radius: 4px;
+            }
+        """)
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(8, 8, 8, 8)
-        root.setSpacing(6)
+        root.setContentsMargins(4, 4, 4, 4)
+        root.setSpacing(3)
 
-        title = QLabel("HUD")
-        title.setFont(QFont("Arial", 11, QFont.Weight.Bold))
-        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        root.addWidget(title)
-
+        # 1. Artificial Horizon (Attitude Indicator)
         self.horizon = ArtificialHorizon()
-        root.addWidget(self.horizon, 1)
+        root.addWidget(self.horizon)
 
+        # 2. Compass Tape
         self.compass = Compass()
         root.addWidget(self.compass)
 
-        self.flight_status = FlightStatus()
-        root.addWidget(self.flight_status)
+        # 3. Compact Attitude Angles Readout Strip
+        readout_layout = QGridLayout()
+        readout_layout.setContentsMargins(4, 2, 4, 2)
+        readout_layout.setHorizontalSpacing(8)
 
-        self.values = {}
-        grid = QGridLayout()
-        grid.setHorizontalSpacing(12)
-        grid.setVerticalSpacing(4)
+        self.lbl_roll = QLabel("ROLL: 0.0°")
+        self.lbl_pitch = QLabel("PITCH: 0.0°")
+        self.lbl_hdg = QLabel("HDG: 000°")
 
-        fields = [
-            ("ALT", "altitude", "m"),
-            ("REL ALT", "relative_altitude", "m"),
-            ("GS", "ground_speed", "m/s"),
-            ("V/S", "velocity_z", "m/s"),
-            ("BAT", "voltage_battery", "V"),
-            ("BAT %", "battery_remaining", "%"),
-        ]
+        for lbl in (self.lbl_roll, self.lbl_pitch, self.lbl_hdg):
+            lbl.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            lbl.setStyleSheet("color: #38bdf8; background: #0b1329; border: 1px solid #1e293b; border-radius: 3px; padding: 2px 4px;")
 
-        for row, (label, attr, unit) in enumerate(fields):
-            name = QLabel(label)
-            name.setStyleSheet("color:#9da7b0;")
-
-            value = QLabel("--")
-            value.setFont(QFont("Arial", 10, QFont.Weight.Bold))
-            value.setAlignment(Qt.AlignmentFlag.AlignRight)
-
-            self.values[attr] = (value, unit)
-
-            grid.addWidget(name, row, 0)
-            grid.addWidget(value, row, 1)
-
-        root.addLayout(grid)
-
-        self.position_label = QLabel("LAT --   LON --")
-        self.position_label.setStyleSheet(
-            "color:#9da7b0; font-size:9px;"
-        )
-        self.position_label.setAlignment(
-            Qt.AlignmentFlag.AlignCenter
-        )
-        root.addWidget(self.position_label)
-
-        root.addStretch(1)
+        readout_layout.addWidget(self.lbl_roll, 0, 0)
+        readout_layout.addWidget(self.lbl_pitch, 0, 1)
+        readout_layout.addWidget(self.lbl_hdg, 0, 2)
+        root.addLayout(readout_layout)
 
     def update_telemetry(self, state: Any) -> None:
-        """Refresh every HUD element from a TelemetryState-like object."""
+        """Refresh HUD elements from a TelemetryState-like object."""
+        if state is None:
+            self.horizon.set_attitude(0.0, 0.0)
+            self.compass.set_heading(0.0)
+            self.lbl_roll.setText("ROLL: --")
+            self.lbl_pitch.setText("PITCH: --")
+            self.lbl_hdg.setText("HDG: --")
+            return
 
-        # MAVLink ATTITUDE.roll/pitch are radians.
-        # ArtificialHorizon expects degrees.
-        roll_deg = self._angle_rad_to_deg(
-            getattr(state, "roll", None)
-        )
-        pitch_deg = self._angle_rad_to_deg(
-            getattr(state, "pitch", None)
-        )
+        roll_deg = self._angle_rad_to_deg(getattr(state, "roll", None))
+        pitch_deg = self._angle_rad_to_deg(getattr(state, "pitch", None))
+        hdg = self._heading(state)
 
-        self.horizon.set_attitude(
-            roll_deg,
-            pitch_deg,
-        )
+        self.horizon.set_attitude(roll_deg, pitch_deg)
+        self.compass.set_heading(hdg)
 
-        self.compass.set_heading(
-            self._heading(state)
-        )
+        roll_val = roll_deg if roll_deg is not None else 0.0
+        pitch_val = pitch_deg if pitch_deg is not None else 0.0
+        hdg_val = hdg if hdg is not None else 0.0
 
-        self.flight_status.update_state(state)
-
-        for attr, (label, unit) in self.values.items():
-            value = getattr(state, attr, None)
-
-            if value is None and attr == "ground_speed":
-                value = getattr(state, "groundspeed", None)
-            elif value is None and attr == "velocity_z":
-                value = getattr(state, "climb", None)
-
-            new_text = self._format_value(value, unit)
-            if label.text() != new_text:
-                label.setText(new_text)
-
-        lat = getattr(state, "latitude", None)
-        lon = getattr(state, "longitude", None)
-
-        if lat is None or lon is None:
-            pos_text = "LAT --   LON --"
-        else:
-            try:
-                pos_text = f"LAT {float(lat):.7f}   LON {float(lon):.7f}"
-            except (TypeError, ValueError):
-                pos_text = "LAT --   LON --"
-
-        if self.position_label.text() != pos_text:
-            self.position_label.setText(pos_text)
+        self.lbl_roll.setText(f"R: {roll_val:+.1f}°")
+        self.lbl_pitch.setText(f"P: {pitch_val:+.1f}°")
+        self.lbl_hdg.setText(f"HDG: {hdg_val:03.0f}°")
 
     @staticmethod
-    def _angle_rad_to_deg(
-        angle: Any,
-    ) -> Optional[float]:
+    def _angle_rad_to_deg(angle: Any) -> Optional[float]:
         """Convert a MAVLink attitude angle from radians to degrees."""
-
         if angle is None:
             return None
-
         try:
             value = float(angle)
+            if not math.isfinite(value):
+                return None
+            return math.degrees(value)
         except (TypeError, ValueError):
             return None
-
-        if not math.isfinite(value):
-            return None
-
-        return math.degrees(value)
 
     @staticmethod
     def _heading(state: Any) -> Optional[float]:
-        heading = getattr(
-            state,
-            "heading",
-            None,
-        )
-
+        heading = getattr(state, "heading", None)
         if heading is None:
-            heading = getattr(
-                state,
-                "vfr_heading",
-                None,
-            )
-
+            heading = getattr(state, "vfr_heading", None)
         return heading
-
-    @staticmethod
-    def _format_value(
-        value: Any,
-        unit: str,
-    ) -> str:
-        if value is None:
-            return "--"
-
-        try:
-            number = float(value)
-        except (TypeError, ValueError):
-            return str(value)
-
-        if unit == "%":
-            return f"{number:.0f} %"
-
-        if unit == "m":
-            return f"{number:.2f} m"
-
-        if unit == "m/s":
-            return f"{number:.2f} m/s"
-
-        if unit == "V":
-            return f"{number:.2f} V"
-
-        return f"{number:.2f} {unit}".strip()

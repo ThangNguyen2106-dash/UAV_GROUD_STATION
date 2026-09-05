@@ -112,7 +112,7 @@ class ConnectionSelector(QGroupBox):
         self.udp_tx_host = QLineEdit("127.0.0.1")
         self.udp_tx_port = NoWheelSpinBox()
         self.udp_tx_port.setRange(1, 65535)
-        self.udp_tx_port.setValue(14560)
+        self.udp_tx_port.setValue(14551)
         layout.addRow("TX Host", self.udp_tx_host)
         layout.addRow("TX Port", self.udp_tx_port)
         return page

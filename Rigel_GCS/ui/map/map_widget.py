@@ -1,6 +1,5 @@
-from __future__ import annotations
-
 import json
+import math
 from typing import Any, List, Optional
 
 from PySide6.QtCore import QObject, Qt, Signal, Slot
@@ -43,9 +42,17 @@ MAP_HTML_TEMPLATE = """<!DOCTYPE html>
             padding: 0;
             background: #0b0f14;
         }
+        .custom-uav-icon {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: transparent !important;
+            border: none !important;
+        }
         .uav-icon {
-            transition: transform 0.15s ease-out;
-            transform-origin: center center;
+            transition: transform 0.1s ease-out;
+            transform-origin: 50% 50%;
+            display: inline-block;
         }
         .waypoint-label {
             background: rgba(15, 23, 42, 0.85);
@@ -85,9 +92,9 @@ MAP_HTML_TEMPLATE = """<!DOCTYPE html>
         L.control.layers(baseMaps, null, { position: 'topright' }).addTo(map);
 
         // UAV Icon (SVG triangle/drone pointer)
-        var uavSvg = '<svg width="36" height="36" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">' +
+        var uavSvg = '<svg width="36" height="36" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg" style="overflow:visible;">' +
                      '<polygon points="18,2 32,32 18,24 4,32" fill="#38bdf8" stroke="#ffffff" stroke-width="2"/>' +
-                     '<circle cx="18" cy="18" r="3" fill="#facc15"/>' +
+                     '<circle cx="18" cy="18" r="3.5" fill="#facc15"/>' +
                      '</svg>';
 
         var uavIcon = L.divIcon({
@@ -145,6 +152,13 @@ MAP_HTML_TEMPLATE = """<!DOCTYPE html>
 
             if (followDrone) {
                 map.panTo(latlng, { animate: true, duration: 0.2 });
+            }
+        };
+
+        window.updateUavHeading = function(heading) {
+            var el = document.getElementById('uav-marker-icon');
+            if (el) {
+                el.style.transform = 'rotate(' + (heading || 0) + 'deg)';
             }
         };
 
@@ -281,28 +295,48 @@ class MapWidget(QFrame):
 
     def update_uav_telemetry(self, state: Any) -> None:
         """Update UAV live marker and path on the map."""
-        lat = getattr(state, "latitude", None)
-        lon = getattr(state, "longitude", None)
-        heading = getattr(state, "heading", None) or getattr(state, "vfr_heading", 0.0) or 0.0
-        alt = getattr(state, "altitude", None) or getattr(state, "relative_altitude", 0.0) or 0.0
-
-        if lat is None or lon is None or (lat == 0.0 and lon == 0.0):
+        if state is None:
             return
 
+        lat = getattr(state, "latitude", None)
+        lon = getattr(state, "longitude", None)
+
+        # Resolve heading: 1. heading (deg) -> 2. vfr_heading (deg) -> 3. yaw (radians -> deg)
+        heading = getattr(state, "heading", None)
+        if heading is None:
+            heading = getattr(state, "vfr_heading", None)
+        if heading is None:
+            yaw = getattr(state, "yaw", None)
+            if yaw is not None:
+                try:
+                    heading = math.degrees(float(yaw)) % 360.0
+                except (TypeError, ValueError):
+                    heading = 0.0
+            else:
+                heading = 0.0
+
+        alt = getattr(state, "altitude", None) or getattr(state, "relative_altitude", 0.0) or 0.0
+
         try:
-            lat_f = float(lat)
-            lon_f = float(lon)
-            head_f = float(heading)
-            alt_f = float(alt)
+            head_f = float(heading) % 360.0
 
-            # Check if coordinates moved significantly (> 1e-6)
-            if self._last_lat is None or abs(lat_f - self._last_lat) > 1e-7 or abs(lon_f - self._last_lon) > 1e-7:
-                self._last_lat = lat_f
-                self._last_lon = lon_f
-                self.coords_label.setText(f"GPS: {lat_f:.6f}, {lon_f:.6f} | Alt: {alt_f:.1f}m")
+            if lat is not None and lon is not None and (float(lat) != 0.0 or float(lon) != 0.0):
+                lat_f = float(lat)
+                lon_f = float(lon)
+                alt_f = float(alt)
 
-            js = f"window.updateUavPosition({lat_f}, {lon_f}, {head_f}, {alt_f});"
-            self.web_view.page().runJavaScript(js)
+                if self._last_lat is None or abs(lat_f - self._last_lat) > 1e-7 or abs(lon_f - self._last_lon) > 1e-7:
+                    self._last_lat = lat_f
+                    self._last_lon = lon_f
+                    self.coords_label.setText(f"GPS: {lat_f:.6f}, {lon_f:.6f} | Alt: {alt_f:.1f}m | Hdg: {head_f:.1f}°")
+
+                js = f"window.updateUavPosition({lat_f}, {lon_f}, {head_f}, {alt_f});"
+                self.web_view.page().runJavaScript(js)
+            else:
+                # Even before 3D GPS fix, rotate the drone icon on the map!
+                self.coords_label.setText(f"GPS: Standby | Hdg: {head_f:.1f}°")
+                js = f"window.updateUavHeading({head_f});"
+                self.web_view.page().runJavaScript(js)
         except (TypeError, ValueError):
             pass
 

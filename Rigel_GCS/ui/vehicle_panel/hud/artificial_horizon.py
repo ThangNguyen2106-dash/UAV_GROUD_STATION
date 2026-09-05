@@ -27,7 +27,8 @@ class ArtificialHorizon(QWidget):
         self._roll = 0.0
         self._pitch = 0.0
 
-        self.setMinimumSize(220, 220)
+        self.setMinimumSize(160, 140)
+        self.setMaximumHeight(190)
         self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
 
     # ------------------------------------------------------------------

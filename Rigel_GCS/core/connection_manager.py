@@ -94,7 +94,7 @@ class ConnectionManager:
     # Connect
     # ---------------------------------------------------------
     def connect_udp(self, rx_host='0.0.0.0', rx_port=14550,
-                    tx_host='127.0.0.1', tx_port=14560,
+                    tx_host='127.0.0.1', tx_port=14551,
                     heartbeat_timeout=None, wait=False):
         cfg = UDPConfig(rx_host=rx_host, rx_port=rx_port,
                         tx_host=tx_host, tx_port=tx_port)
@@ -204,9 +204,16 @@ class ConnectionManager:
             tx_endpoint=tx,
         )
 
+        if sysid is not None and sysid > 0:
+            link.target_devices.add((sysid, compid))
+            link.heartbeat_event.set()
+            if not link.ready:
+                link.ready = True
+                print(f"[CONNECTION STATE] VEHICLE_DETECTED | {link.key}")
+                self._refresh_global_state()
+
         if message.get_type() == 'HEARTBEAT':
             device.update_heartbeat(message)
-            link.target_devices.add((sysid, compid))
         else:
             device.update_message(message)
 
