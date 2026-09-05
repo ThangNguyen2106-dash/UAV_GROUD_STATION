@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import math
-import time
 from typing import Optional
 
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QColor, QBrush, QFont, QPainter, QPen
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import QWidget
 
 
@@ -18,9 +17,6 @@ class ArtificialHorizon(QWidget):
     reference symbol remains fixed at the center.
     """
 
-    MAX_HUD_FPS = 30
-    UPDATE_INTERVAL_MS = 1000 // MAX_HUD_FPS
-
     # Pixel movement per degree of pitch. A larger value makes pitch
     # changes visually stronger.
     PITCH_PIXELS_PER_DEGREE = 4.0
@@ -31,18 +27,8 @@ class ArtificialHorizon(QWidget):
         self._roll = 0.0
         self._pitch = 0.0
 
-        self._target_roll = 0.0
-        self._target_pitch = 0.0
-
-        self._last_update = time.monotonic()
-
         self.setMinimumSize(220, 220)
         self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
-
-        self._timer = QTimer(self)
-        self._timer.setInterval(self.UPDATE_INTERVAL_MS)
-        self._timer.timeout.connect(self._animate)
-        self._timer.start()
 
     # ------------------------------------------------------------------
     # TELEMETRY INPUT
@@ -53,11 +39,14 @@ class ArtificialHorizon(QWidget):
         roll: Optional[float],
         pitch: Optional[float],
     ) -> None:
+        changed = False
+
         if roll is not None:
             try:
                 value = float(roll)
-                if math.isfinite(value):
-                    self._target_roll = value
+                if math.isfinite(value) and value != self._roll:
+                    self._roll = value
+                    changed = True
             except (TypeError, ValueError):
                 pass
 
@@ -65,9 +54,15 @@ class ArtificialHorizon(QWidget):
             try:
                 value = float(pitch)
                 if math.isfinite(value):
-                    self._target_pitch = max(-89.9, min(89.9, value))
+                    clamped = max(-89.9, min(89.9, value))
+                    if clamped != self._pitch:
+                        self._pitch = clamped
+                        changed = True
             except (TypeError, ValueError):
                 pass
+
+        if changed:
+            self.update()
 
     def set_roll(self, roll: Optional[float]) -> None:
         if roll is None:
@@ -75,8 +70,9 @@ class ArtificialHorizon(QWidget):
 
         try:
             value = float(roll)
-            if math.isfinite(value):
-                self._target_roll = value
+            if math.isfinite(value) and value != self._roll:
+                self._roll = value
+                self.update()
         except (TypeError, ValueError):
             return
 
@@ -87,41 +83,12 @@ class ArtificialHorizon(QWidget):
         try:
             value = float(pitch)
             if math.isfinite(value):
-                self._target_pitch = max(-89.9, min(89.9, value))
+                clamped = max(-89.9, min(89.9, value))
+                if clamped != self._pitch:
+                    self._pitch = clamped
+                    self.update()
         except (TypeError, ValueError):
             return
-
-    # ------------------------------------------------------------------
-    # SMOOTH DISPLAY UPDATE
-    # ------------------------------------------------------------------
-
-    def _animate(self) -> None:
-        now = time.monotonic()
-        dt = max(0.001, min(0.08, now - self._last_update))
-        self._last_update = now
-
-        # Fast enough to follow the aircraft while still suppressing
-        # telemetry jitter.
-        alpha = 1.0 - math.exp(-18.0 * dt)
-
-        roll_error = self._target_roll - self._roll
-
-        # Handle the shortest path around +/-180 degrees.
-        while roll_error > 180.0:
-            roll_error -= 360.0
-        while roll_error < -180.0:
-            roll_error += 360.0
-
-        self._roll += roll_error * alpha
-        self._pitch += (self._target_pitch - self._pitch) * alpha
-
-        if abs(roll_error) < 0.02:
-            self._roll = self._target_roll
-
-        if abs(self._target_pitch - self._pitch) < 0.02:
-            self._pitch = self._target_pitch
-
-        self.update()
 
     # ------------------------------------------------------------------
     # PAINTING

@@ -112,36 +112,27 @@ class HUDWidget(QFrame):
             value = getattr(state, attr, None)
 
             if value is None and attr == "ground_speed":
-                value = getattr(
-                    state,
-                    "groundspeed",
-                    None,
-                )
+                value = getattr(state, "groundspeed", None)
+            elif value is None and attr == "velocity_z":
+                value = getattr(state, "climb", None)
 
-            label.setText(
-                self._format_value(
-                    value,
-                    unit,
-                )
-            )
+            new_text = self._format_value(value, unit)
+            if label.text() != new_text:
+                label.setText(new_text)
 
         lat = getattr(state, "latitude", None)
         lon = getattr(state, "longitude", None)
 
         if lat is None or lon is None:
-            self.position_label.setText(
-                "LAT --   LON --"
-            )
+            pos_text = "LAT --   LON --"
         else:
             try:
-                self.position_label.setText(
-                    f"LAT {float(lat):.7f}   "
-                    f"LON {float(lon):.7f}"
-                )
+                pos_text = f"LAT {float(lat):.7f}   LON {float(lon):.7f}"
             except (TypeError, ValueError):
-                self.position_label.setText(
-                    "LAT --   LON --"
-                )
+                pos_text = "LAT --   LON --"
+
+        if self.position_label.text() != pos_text:
+            self.position_label.setText(pos_text)
 
     @staticmethod
     def _angle_rad_to_deg(

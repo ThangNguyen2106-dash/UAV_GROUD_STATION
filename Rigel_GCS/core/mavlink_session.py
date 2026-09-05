@@ -117,22 +117,47 @@ class MAVLinkSession:
         if key in self._telemetry_requested_for:
             return 0
 
-        cmd = getattr(mavutil.mavlink, 'MAV_CMD_SET_MESSAGE_INTERVAL', 511)
-        requests = [
-            (getattr(mavutil.mavlink, 'MAVLINK_MSG_ID_GLOBAL_POSITION_INT', 33), 100000),
-            (getattr(mavutil.mavlink, 'MAVLINK_MSG_ID_GPS_RAW_INT', 24), 200000),
-            (getattr(mavutil.mavlink, 'MAVLINK_MSG_ID_ATTITUDE', 30), 10000),
-            (getattr(mavutil.mavlink, 'MAVLINK_MSG_ID_SYS_STATUS', 1), 500000),
-            (getattr(mavutil.mavlink, 'MAVLINK_MSG_ID_BATTERY_STATUS', 147), 500000),
-            (getattr(mavutil.mavlink, 'MAVLINK_MSG_ID_VFR_HUD', 74), 200000),
-            (getattr(mavutil.mavlink, 'MAVLINK_MSG_ID_HOME_POSITION', 242), 1000000),
-        ]
         sent = 0
+
+        # 1. Standard ArduPilot / APM Data Streams (REQUEST_DATA_STREAM)
+        stream_requests = [
+            (getattr(mavutil.mavlink, "MAV_DATA_STREAM_EXTRA1", 10), 20),           # ATTITUDE (20 Hz)
+            (getattr(mavutil.mavlink, "MAV_DATA_STREAM_EXTRA2", 11), 10),           # VFR_HUD (10 Hz)
+            (getattr(mavutil.mavlink, "MAV_DATA_STREAM_POSITION", 6), 10),          # GLOBAL_POSITION_INT (10 Hz)
+            (getattr(mavutil.mavlink, "MAV_DATA_STREAM_EXTENDED_STATUS", 2), 2),    # SYS_STATUS, GPS_RAW (2 Hz)
+            (getattr(mavutil.mavlink, "MAV_DATA_STREAM_RAW_SENSORS", 1), 2),        # IMU RAW (2 Hz)
+            (getattr(mavutil.mavlink, "MAV_DATA_STREAM_ALL", 0), 10),               # ALL (10 Hz fallback)
+        ]
+        for stream_id, rate_hz in stream_requests:
+            try:
+                stream_msg = self._parser.request_data_stream_encode(
+                    int(sysid),
+                    int(compid),
+                    int(stream_id),
+                    int(rate_hz),
+                    1,  # 1 = start stream
+                )
+                if self.send_message(stream_msg):
+                    sent += 1
+            except Exception as exc:
+                print(f"[MAVLINK DATA STREAM ERROR] {exc}")
+
+        # 2. Modern MAV_CMD_SET_MESSAGE_INTERVAL
+        cmd = getattr(mavutil.mavlink, "MAV_CMD_SET_MESSAGE_INTERVAL", 511)
+        requests = [
+            (getattr(mavutil.mavlink, "MAVLINK_MSG_ID_GLOBAL_POSITION_INT", 33), 100000),  # 10 Hz
+            (getattr(mavutil.mavlink, "MAVLINK_MSG_ID_GPS_RAW_INT", 24), 200000),           # 5 Hz
+            (getattr(mavutil.mavlink, "MAVLINK_MSG_ID_ATTITUDE", 30), 50000),                # 20 Hz
+            (getattr(mavutil.mavlink, "MAVLINK_MSG_ID_SYS_STATUS", 1), 500000),              # 2 Hz
+            (getattr(mavutil.mavlink, "MAVLINK_MSG_ID_BATTERY_STATUS", 147), 500000),        # 2 Hz
+            (getattr(mavutil.mavlink, "MAVLINK_MSG_ID_VFR_HUD", 74), 200000),                # 5 Hz
+            (getattr(mavutil.mavlink, "MAVLINK_MSG_ID_HOME_POSITION", 242), 1000000),        # 1 Hz
+        ]
         for msg_id, interval_us in requests:
             try:
                 message = self._parser.command_long_encode(
                     int(sysid), int(compid), int(cmd), 0,
-                    float(msg_id), float(interval_us), -1, 0, 0, 0, 0
+                    float(msg_id), float(interval_us), 0, 0, 0, 0, 0
                 )
                 if self.send_message(message):
                     sent += 1
@@ -141,7 +166,7 @@ class MAVLinkSession:
 
         if sent:
             self._telemetry_requested_for.add(key)
-            print(f"[MAVLINK TX] Requested telemetry from SYSID={sysid} COMPID={compid} ({sent} streams)")
+            print(f"[MAVLINK TX] Requested telemetry from SYSID={sysid} COMPID={compid} ({sent} streams requested)")
         return sent
 
     # ==========================================================

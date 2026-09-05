@@ -23,11 +23,12 @@ class Compass(QWidget):
             return
 
         try:
-            self._heading = float(heading) % 360.0
+            val = float(heading) % 360.0
+            if abs(val - self._heading) > 1e-4:
+                self._heading = val
+                self.update()
         except (TypeError, ValueError):
             return
-
-        self.update()
 
     def paintEvent(self, event) -> None:  # noqa: N802
         painter = QPainter(self)

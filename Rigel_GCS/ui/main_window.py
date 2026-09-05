@@ -15,8 +15,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QListWidget,
-    QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QPushButton,
@@ -69,6 +67,7 @@ class MainWindow(QMainWindow):
     """
 
     POLL_MS = 250
+    HUD_POLL_MS = 25
 
     def __init__(self, connection_manager) -> None:
         super().__init__()
@@ -84,9 +83,21 @@ class MainWindow(QMainWindow):
         self._apply_style()
         self._refresh_serial_ports()
 
+        # ============================================================
+        # SLOW UI TIMER
+        # ============================================================
         self.timer = QTimer(self)
+        self.timer.setInterval(self.POLL_MS)
         self.timer.timeout.connect(self._refresh_runtime)
-        self.timer.start(self.POLL_MS)
+        self.timer.start()
+
+        # ============================================================
+        # REALTIME HUD TIMER
+        # ============================================================
+        self.hud_timer = QTimer(self)
+        self.hud_timer.setInterval(self.HUD_POLL_MS)   # 40 Hz
+        self.hud_timer.timeout.connect(self._refresh_hud)
+        self.hud_timer.start()
 
     # ============================================================
     # UI BUILD
@@ -115,8 +126,8 @@ class MainWindow(QMainWindow):
         side.setSpacing(7)
 
         side.addWidget(self._build_connection_box())
+        side.addWidget(self._build_vehicle_selector())
         side.addWidget(self._build_hud_box())
-        side.addWidget(self._build_devices_box())
         side.addWidget(self._build_telemetry_box())
 
         sidebar_scroll = QScrollArea()
@@ -236,12 +247,16 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.hud)
         return box
 
-    def _build_devices_box(self) -> QGroupBox:
-        box = QGroupBox("DETECTED DEVICES")
+    def _build_vehicle_selector(self) -> QGroupBox:
+        box = QGroupBox("ACTIVE DRONE")
         layout = QVBoxLayout(box)
-        self.device_list = QListWidget()
-        self.device_list.currentItemChanged.connect(self._on_device_selected)
-        layout.addWidget(self.device_list)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(4)
+
+        self.device_combo = QComboBox()
+        self.device_combo.addItem("No drone detected", None)
+        self.device_combo.currentIndexChanged.connect(self._on_device_combo_changed)
+        layout.addWidget(self.device_combo)
         return box
 
     def _build_telemetry_box(self) -> QGroupBox:
@@ -349,18 +364,33 @@ class MainWindow(QMainWindow):
     # ============================================================
     # RUNTIME REFRESH
     # ============================================================
+    def _refresh_hud(self) -> None:
+        if self.selected_key is None:
+            return
+
+        transport, sysid, compid = self.selected_key
+
+        state = self.connection_manager.get_telemetry(
+            sysid,
+            compid,
+            transport,
+        )
+
+        if state is None:
+            return
+
+        self.hud.update_telemetry(state)
+
 
     def _refresh_runtime(self) -> None:
         self._refresh_connection_status()
         self._refresh_devices()
-        self._refresh_selected_telemetry()
 
     def _refresh_connection_status(self) -> None:
         state = getattr(self.connection_manager.state, "value", str(self.connection_manager.state))
         self.connection_status.setText(str(state).upper())
 
     def _refresh_devices(self) -> None:
-        connections = self.connection_manager.get_connections()
         devices = self.connection_manager.get_devices()
 
         candidates = []
@@ -368,48 +398,45 @@ class MainWindow(QMainWindow):
             transport = str(getattr(device, "transport", "UNKNOWN") or "UNKNOWN").upper()
             sysid = int(getattr(device, "sysid", 0))
             compid = int(getattr(device, "compid", 0))
-            rx = str(getattr(device, "rx_endpoint", "--") or "--")
-            tx = str(getattr(device, "tx_endpoint", "--") or "--")
-            ready = False
-            for connection in connections:
-                if connection.get("transport") == transport and (sysid, compid) in connection.get("devices", []):
-                    ready = bool(connection.get("ready"))
-                    break
-            candidates.append((transport, sysid, compid, rx, tx, ready))
+            candidates.append((transport, sysid, compid))
 
-        candidates.sort(key=lambda x: (x[0], x[1], x[2], x[3]))
+        candidates.sort(key=lambda x: (x[1], x[0], x[2]))
         new_keys = [(x[0], x[1], x[2]) for x in candidates]
+
         old_keys = []
-        for i in range(self.device_list.count()):
-            item = self.device_list.item(i)
-            old_keys.append(item.data(Qt.UserRole))
+        for i in range(self.device_combo.count()):
+            key = self.device_combo.itemData(i)
+            if key is not None:
+                old_keys.append(tuple(key))
 
         if new_keys != old_keys:
             current_key = self.selected_key
             self._updating_devices = True
-            self.device_list.clear()
-            for transport, sysid, compid, rx, tx, ready in candidates:
-                key = (transport, sysid, compid)
-                state = "ONLINE" if ready and self._heartbeat_alive(key) else "OFFLINE"
-                item = QListWidgetItem(
-                    f"{transport}  SYSID={sysid}  COMPID={compid}  [{state}]"
-                )
-                item.setData(Qt.UserRole, key)
-                item.setToolTip(f"RX: {rx}\nTX: {tx}")
-                self.device_list.addItem(item)
-                if key == current_key:
-                    self.device_list.setCurrentItem(item)
+            self.device_combo.clear()
+
+            if not candidates:
+                self.device_combo.addItem("No drone detected", None)
+                self.selected_key = None
+                self._clear_telemetry()
+            else:
+                for transport, sysid, compid in candidates:
+                    key = (transport, sysid, compid)
+                    item_text = f"Drone ID: {sysid}"
+                    self.device_combo.addItem(item_text, key)
+
+                # Keep current selection or default to index 0
+                index_to_select = 0
+                if current_key is not None:
+                    for i in range(self.device_combo.count()):
+                        if self.device_combo.itemData(i) == current_key:
+                            index_to_select = i
+                            break
+
+                self.device_combo.setCurrentIndex(index_to_select)
+                self.selected_key = self.device_combo.itemData(index_to_select)
+                self._refresh_selected_telemetry()
+
             self._updating_devices = False
-
-        if self.device_list.count() == 1 and self.selected_key is None:
-            self.device_list.setCurrentRow(0)
-
-    def _heartbeat_alive(self, key: tuple[str, int, int]) -> bool:
-        transport, sysid, compid = key
-        telemetry = self.connection_manager.get_telemetry(sysid, compid, transport)
-        if telemetry is None:
-            return False
-        return bool(getattr(telemetry, "connected", False))
 
     def _refresh_selected_telemetry(self) -> None:
         if self.selected_key is None:
@@ -422,14 +449,12 @@ class MainWindow(QMainWindow):
         if state is None:
             return
 
-        self.selected_title.setText(f"{transport} : SYSID {sysid} / COMPID {compid}")
+        self.selected_title.setText(f"Drone ID: {sysid}")
         self.hud.update_telemetry(state)
         rx = getattr(state, "rx_endpoint", None) or getattr(device, "rx_endpoint", None) or "--"
         tx = getattr(state, "tx_endpoint", None) or getattr(device, "tx_endpoint", None) or "--"
-        self.selected_link.setText(f"RX {rx}   |   TX {tx}")
-        self.workspace_status.setText(
-            f"Active vehicle: {transport} SYSID={sysid} COMPID={compid}"
-        )
+        self.selected_link.setText(f"Port: {transport}   |   RX: {rx}")
+        self.workspace_status.setText(f"Active vehicle: Drone ID {sysid}")
 
         for attr, label in self.telemetry_values.items():
             value = getattr(state, attr, None)
@@ -464,14 +489,16 @@ class MainWindow(QMainWindow):
             return f"{value:.6f}" if attr in ("latitude", "longitude") else f"{value:.2f}"
         return str(value)
 
-    def _on_device_selected(self, current, _previous) -> None:
-        if self._updating_devices or current is None:
+    def _on_device_combo_changed(self, index: int) -> None:
+        if self._updating_devices or index < 0:
             return
-        key = current.data(Qt.UserRole)
-        if not key:
-            return
-        self.selected_key = tuple(key)
-        self._refresh_selected_telemetry()
+        key = self.device_combo.itemData(index)
+        if key is not None:
+            self.selected_key = tuple(key)
+            self._refresh_selected_telemetry()
+        else:
+            self.selected_key = None
+            self._clear_telemetry()
 
     # ============================================================
     # COM / TRANSPORT UI

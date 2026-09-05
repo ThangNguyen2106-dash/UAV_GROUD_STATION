@@ -20,27 +20,47 @@ class FlightStatus(QWidget):
         self.setMinimumHeight(104)
 
     def update_state(self, state: Any) -> None:
-        self._armed = getattr(state, "armed", None)
-        self._mode = getattr(state, "flight_mode", None)
-        if self._mode is None:
-            self._mode = getattr(state, "mode", None)
-        self._fix = getattr(state, "fix_type", None)
-        self._sats = getattr(state, "satellites_visible", None)
-        self._connected = bool(getattr(state, "connected", False))
-        self.update()
+        armed = getattr(state, "armed", None)
+        mode = getattr(state, "flight_mode", None)
+        if mode is None:
+            mode = getattr(state, "mode", None)
+        fix = getattr(state, "fix_type", None)
+        sats = getattr(state, "satellites_visible", None)
+        connected = bool(getattr(state, "connected", False))
+
+        if (
+            armed != self._armed
+            or mode != self._mode
+            or fix != self._fix
+            or sats != self._sats
+            or connected != self._connected
+        ):
+            self._armed = armed
+            self._mode = mode
+            self._fix = fix
+            self._sats = sats
+            self._connected = connected
+            self.update()
 
     def set_status(self, *, armed=None, mode=None, fix=None, sats=None, connected=None) -> None:
-        if armed is not None:
+        changed = False
+        if armed is not None and bool(armed) != self._armed:
             self._armed = bool(armed)
-        if mode is not None:
+            changed = True
+        if mode is not None and str(mode) != self._mode:
             self._mode = str(mode)
-        if fix is not None:
+            changed = True
+        if fix is not None and int(fix) != self._fix:
             self._fix = int(fix)
-        if sats is not None:
+            changed = True
+        if sats is not None and int(sats) != self._sats:
             self._sats = int(sats)
-        if connected is not None:
+            changed = True
+        if connected is not None and bool(connected) != self._connected:
             self._connected = bool(connected)
-        self.update()
+            changed = True
+        if changed:
+            self.update()
 
     def paintEvent(self, event) -> None:  # noqa: N802
         painter = QPainter(self)
