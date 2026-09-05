@@ -105,6 +105,21 @@ class MAVLinkSession:
             print(f"[MAVLINK TX ERROR] {type(exc).__name__}: {exc}")
             return False
 
+    def send_gcs_heartbeat(self) -> bool:
+        """Send a standard GCS Heartbeat (1 Hz) to notify simulator/autopilot that GCS is active."""
+        try:
+            hb = self._parser.heartbeat_encode(
+                getattr(mavutil.mavlink, "MAV_TYPE_GCS", 6),
+                getattr(mavutil.mavlink, "MAV_AUTOPILOT_INVALID", 8),
+                0,
+                0,
+                getattr(mavutil.mavlink, "MAV_STATE_ACTIVE", 4),
+            )
+            return self.send_message(hb)
+        except Exception as exc:
+            print(f"[GCS HEARTBEAT TX ERROR] {exc}")
+            return False
+
     def request_telemetry(self, target_system=None, target_component=None) -> int:
         """Request useful telemetry streams from a discovered vehicle."""
         if not self.request_telemetry_enabled or self.send_raw is None:

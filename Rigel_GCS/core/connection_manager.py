@@ -34,7 +34,7 @@ class ConnectionManager:
     per COM port. Registry identity is (transport, SYSID, COMPID).
     """
 
-    def __init__(self, heartbeat_timeout=3.0, link_lost_timeout=3.0):
+    def __init__(self, heartbeat_timeout=10.0, link_lost_timeout=6.0):
         self.registry = DeviceRegistry()
         self.telemetry = TelemetryManager(heartbeat_timeout=heartbeat_timeout)
         self.heartbeat_timeout = heartbeat_timeout
@@ -158,18 +158,21 @@ class ConnectionManager:
     def _worker(self, link: _Link, timeout: float):
         try:
             link.transport.start()
-            print(f"[CONNECTION] {link.kind} transport started; waiting HEARTBEAT | {link.key}")
-            if not link.heartbeat_event.wait(timeout):
-                raise TimeoutError(f"HEARTBEAT timeout: {link.key}")
-            if link.stop_event.is_set():
-                return
-            link.ready = True
-            print(f"[CONNECTION STATE] VEHICLE_DETECTED | {link.key}")
-            self._refresh_global_state()
+            print(f"[CONNECTION] {link.kind} transport started; listening on {link.key}")
+
+            # Start background monitoring loop immediately (GCS Heartbeats & Link watchdog)
             link.monitor_thread = threading.Thread(
                 target=self._monitor_loop,
                 args=(link,), daemon=True, name=f'RIGEL-{link.kind}-MONITOR')
             link.monitor_thread.start()
+
+            # Wait for first heartbeat for callers that wait
+            if link.heartbeat_event.wait(timeout):
+                link.ready = True
+                print(f"[CONNECTION STATE] VEHICLE_DETECTED | {link.key}")
+                self._refresh_global_state()
+            else:
+                print(f"[CONNECTION] Transport listening; waiting for vehicle heartbeat on {link.key}...")
         except Exception as exc:
             self._set_error(exc)
             self._remove_link(link.key, final_disconnect=False)
@@ -259,13 +262,33 @@ class ConnectionManager:
     # ---------------------------------------------------------
     # Monitoring
     # ---------------------------------------------------------
-    def _monitor_loop(self, link):
-        while not link.stop_event.wait(0.25):
-            if not link.session.heartbeat_alive(self.link_lost_timeout):
-                link.ready = False
-                print(f"[CONNECTION STATE] LOST | {link.key}")
+    def _monitor_loop(self, link: _Link):
+        import time
+        last_gcs_hb = 0.0
+        while not link.stop_event.is_set():
+            now = time.monotonic()
+
+            # 1. Send periodic 1 Hz GCS Heartbeat to maintain link with simulator / autopilot
+            if now - last_gcs_hb >= 1.0:
+                last_gcs_hb = now
+                link.session.send_gcs_heartbeat()
+
+            # 2. Watchdog: check if vehicle heartbeat is active
+            is_alive = link.session.heartbeat_alive(self.link_lost_timeout)
+
+            if is_alive and not link.ready:
+                link.ready = True
+                print(f"[CONNECTION STATE] VEHICLE_ALIVE / CONNECTED | {link.key}")
                 self._refresh_global_state()
-                break
+                # Re-request telemetry stream if necessary
+                if link.session.target_system is not None:
+                    link.session.request_telemetry(link.session.target_system, link.session.target_component)
+            elif not is_alive and link.ready:
+                link.ready = False
+                print(f"[CONNECTION STATE] HEARTBEAT_TIMEOUT (NO VEHICLE HEARTBEAT FOR {self.link_lost_timeout:.1f}s) | {link.key}")
+                self._refresh_global_state()
+
+            link.stop_event.wait(0.25)
 
     # ---------------------------------------------------------
     # Endpoint helpers

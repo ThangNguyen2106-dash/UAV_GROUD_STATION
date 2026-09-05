@@ -262,8 +262,8 @@ class UDPTransport:
         target_host = host or self.config.tx_host
         target_port = port or self.config.tx_port
 
+        success = False
         try:
-
             sent = self._tx_socket.sendto(
                 data,
                 (
@@ -271,17 +271,28 @@ class UDPTransport:
                     target_port,
                 ),
             )
+            if sent == len(data):
+                success = True
+        except OSError:
+            pass
 
+        # Also send to the source address of the last received UDP packet (NAT / SITL return path)
+        if host is None and port is None and self._last_rx_address is not None:
+            peer_host, peer_port = self._last_rx_address
+            if (peer_host, peer_port) != (target_host, target_port):
+                try:
+                    sent_peer = self._tx_socket.sendto(data, (peer_host, peer_port))
+                    if sent_peer == len(data):
+                        success = True
+                except OSError:
+                    pass
+
+        if success:
             with self._lock:
                 self._tx_packets += 1
-                self._tx_bytes += sent
+                self._tx_bytes += len(data)
 
-            return sent == len(data)
-
-        except OSError as exc:
-
-            print(f"[UDP TX ERROR] {exc}")
-            return False
+        return success
 
     # ==========================================================
     # STOP
