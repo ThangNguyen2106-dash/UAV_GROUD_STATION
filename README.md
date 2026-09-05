@@ -22,10 +22,9 @@ Yêu cầu Python 3.11+.
 
 ```bash
 pip install -r requirements.txt
-pip install PySide6==6.11.2   # bắt buộc bản đầy đủ (kèm PySide6-Addons/QtWebEngine cho bản đồ)
 ```
 
-> Lưu ý: `requirements.txt` hiện chỉ liệt kê `pyserial` và `pymavlink`. PySide6 phải cài riêng bản đầy đủ (`PySide6`, không chỉ `PySide6-Essentials`) vì module bản đồ dùng `QtWebEngineWidgets`.
+> Lưu ý: phải cài `PySide6` bản đầy đủ (không chỉ `PySide6-Essentials`) vì module bản đồ dùng `QtWebEngineWidgets`, nằm trong gói `PySide6-Addons` được `PySide6` kéo theo tự động.
 
 ## Chạy ứng dụng
 
