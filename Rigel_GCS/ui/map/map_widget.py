@@ -214,8 +214,9 @@ class MapWidget(QFrame):
 
     waypoint_clicked = Signal(float, float)
 
-    def __init__(self, parent: Optional[QWidget] = None) -> None:
+    def __init__(self, enable_waypoint_click: bool = True, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
+        self.enable_waypoint_click = enable_waypoint_click
         self.setObjectName("MapWidget")
         self.setFrameShape(QFrame.Shape.StyledPanel)
 
@@ -257,18 +258,26 @@ class MapWidget(QFrame):
         self.btn_clear_trail.clicked.connect(self.clear_flight_trail)
         t_layout.addWidget(self.btn_clear_trail)
 
+        self.mode_indicator = QLabel("🖱️ Click map to add WP" if self.enable_waypoint_click else "✈️ Flight Mode")
+        self.mode_indicator.setStyleSheet("color:#94a3b8; font-size:10px; padding:0 4px;")
+        t_layout.addWidget(self.mode_indicator)
+
         layout.addWidget(toolbar)
 
         # WebEngine View
         self.web_view = QWebEngineView()
         self.channel = QWebChannel(self)
         self.bridge = MapBridge(self)
-        self.bridge.map_clicked.connect(self.waypoint_clicked.emit)
+        self.bridge.map_clicked.connect(self._on_bridge_map_clicked)
         self.channel.registerObject("pyBridge", self.bridge)
         self.web_view.page().setWebChannel(self.channel)
 
         self.web_view.setHtml(MAP_HTML_TEMPLATE)
         layout.addWidget(self.web_view, 1)
+
+    def _on_bridge_map_clicked(self, lat: float, lon: float) -> None:
+        if self.enable_waypoint_click:
+            self.waypoint_clicked.emit(lat, lon)
 
     def update_uav_telemetry(self, state: Any) -> None:
         """Update UAV live marker and path on the map."""

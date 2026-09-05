@@ -113,20 +113,46 @@ class MainWindow(QMainWindow):
         root = QWidget()
         self.setCentralWidget(root)
 
-        outer = QHBoxLayout(root)
-        outer.setContentsMargins(8, 8, 8, 8)
-        outer.setSpacing(8)
+        main_layout = QVBoxLayout(root)
+        main_layout.setContentsMargins(6, 6, 6, 6)
+        main_layout.setSpacing(6)
 
-        splitter = QSplitter(Qt.Horizontal)
-        splitter.setChildrenCollapsible(False)
-        outer.addWidget(splitter)
+        # Top-level Tabs
+        self.main_tabs = QTabWidget()
+        self.main_tabs.setStyleSheet("""
+            QTabBar::tab {
+                font-weight: bold;
+                font-size: 13px;
+                padding: 8px 24px;
+                margin-right: 4px;
+            }
+            QTabBar::tab:selected {
+                background: #0284c7;
+                color: white;
+                border-radius: 4px;
+            }
+            QTabBar::tab:!selected {
+                background: #1e293b;
+                color: #94a3b8;
+                border-radius: 4px;
+            }
+        """)
 
-        # --------------------------------------------------------
-        # LEFT SIDEBAR
-        # --------------------------------------------------------
+        # ========================================================
+        # TAB 1: 📊 DATA (FLIGHT DATA & LIVE MONITORING)
+        # ========================================================
+        tab_data = QWidget()
+        data_layout = QHBoxLayout(tab_data)
+        data_layout.setContentsMargins(0, 4, 0, 0)
+        data_layout.setSpacing(8)
+
+        data_splitter = QSplitter(Qt.Horizontal)
+        data_splitter.setChildrenCollapsible(False)
+
+        # Left Sidebar (Connection, Active Drone, HUD, Telemetry Table)
         sidebar = QWidget()
         sidebar.setMinimumWidth(285)
-        sidebar.setMaximumWidth(430)
+        sidebar.setMaximumWidth(420)
         side = QVBoxLayout(sidebar)
         side.setContentsMargins(0, 0, 0, 0)
         side.setSpacing(7)
@@ -141,38 +167,63 @@ class MainWindow(QMainWindow):
         sidebar_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         sidebar_scroll.setFrameShape(QFrame.Shape.NoFrame)
         sidebar_scroll.setWidget(sidebar)
-        splitter.addWidget(sidebar_scroll)
+        data_splitter.addWidget(sidebar_scroll)
 
-        # --------------------------------------------------------
-        # RIGHT WORKSPACE - MAP + FLIGHT CONTROLS & MISSION
-        # --------------------------------------------------------
-        right_splitter = QSplitter(Qt.Horizontal)
-        right_splitter.setChildrenCollapsible(False)
+        # Center/Right of Tab 1: Live Flight Map + Quick Flight Controls
+        data_center_splitter = QSplitter(Qt.Horizontal)
+        data_center_splitter.setChildrenCollapsible(False)
 
-        # Center Map
-        self.map_widget = MapWidget()
-        right_splitter.addWidget(self.map_widget)
+        # Live Map (Read-only waypoint mode: enable_waypoint_click=False)
+        self.data_map = MapWidget(enable_waypoint_click=False)
+        data_center_splitter.addWidget(self.data_map)
 
-        # Right Tabbed Panels (Controls & Mission Planner)
-        control_tabs = QTabWidget()
-        control_tabs.setMinimumWidth(320)
-        control_tabs.setMaximumWidth(420)
-
+        # Flight Controls Panel (Right column of Data tab)
         self.flight_controls = FlightControlPanel(self.connection_manager)
-        control_tabs.addTab(self.flight_controls, "🎮 CONTROLS")
+        self.flight_controls.setMinimumWidth(300)
+        self.flight_controls.setMaximumWidth(380)
+        data_center_splitter.addWidget(self.flight_controls)
+        data_center_splitter.setSizes([850, 320])
 
+        data_splitter.addWidget(data_center_splitter)
+        data_splitter.setSizes([340, 1100])
+        data_layout.addWidget(data_splitter)
+
+        self.main_tabs.addTab(tab_data, "📊 DATA (FLIGHT DATA)")
+
+        # ========================================================
+        # TAB 2: 📍 MISSION (MISSION PLANNER & WAYPOINT EDITOR)
+        # ========================================================
+        tab_mission = QWidget()
+        mission_layout = QHBoxLayout(tab_mission)
+        mission_layout.setContentsMargins(0, 4, 0, 0)
+        mission_layout.setSpacing(8)
+
+        mission_splitter = QSplitter(Qt.Horizontal)
+        mission_splitter.setChildrenCollapsible(False)
+
+        # Mission Map (Interactive waypoint click mode: enable_waypoint_click=True)
+        self.mission_map = MapWidget(enable_waypoint_click=True)
+        mission_splitter.addWidget(self.mission_map)
+
+        # Mission Planner Panel (Right side of Mission tab)
         self.mission_panel = MissionPanel(self.connection_manager)
-        control_tabs.addTab(self.mission_panel, "📍 MISSION")
+        self.mission_panel.setMinimumWidth(380)
+        self.mission_panel.setMaximumWidth(520)
+        mission_splitter.addWidget(self.mission_panel)
+        mission_splitter.setSizes([950, 450])
 
-        # Connect Mission Waypoint signals to Map Widget
-        self.mission_panel.waypoints_changed.connect(self.map_widget.update_waypoints_display)
-        self.map_widget.waypoint_clicked.connect(self.mission_panel.add_waypoint)
+        mission_layout.addWidget(mission_splitter)
+        self.main_tabs.addTab(tab_mission, "📍 MISSION (PLANNER)")
 
-        right_splitter.addWidget(control_tabs)
-        right_splitter.setSizes([850, 350])
+        main_layout.addWidget(self.main_tabs)
 
-        splitter.addWidget(right_splitter)
-        splitter.setSizes([340, 1200])
+        # Connect Waypoint signals:
+        # 1. Clicking on Mission Map adds a Waypoint in Mission Panel
+        self.mission_map.waypoint_clicked.connect(self.mission_panel.add_waypoint)
+
+        # 2. When waypoints change in Mission Panel: sync to BOTH Mission Map and Data Map!
+        self.mission_panel.waypoints_changed.connect(self.mission_map.update_waypoints_display)
+        self.mission_panel.waypoints_changed.connect(self.data_map.update_waypoints_display)
 
         self.workspace_status = QLabel("Ready")
 
@@ -387,7 +438,8 @@ class MainWindow(QMainWindow):
             return
 
         self.hud.update_telemetry(state)
-        self.map_widget.update_uav_telemetry(state)
+        self.data_map.update_uav_telemetry(state)
+        self.mission_map.update_uav_telemetry(state)
         self.flight_controls.update_telemetry(state)
         self.mission_panel.update_telemetry(state)
         self.logger.log_state(state)
@@ -466,7 +518,8 @@ class MainWindow(QMainWindow):
         self.mission_panel.set_active_vehicle(self.selected_key)
         self.flight_controls.update_telemetry(state)
         self.mission_panel.update_telemetry(state)
-        self.map_widget.update_uav_telemetry(state)
+        self.data_map.update_uav_telemetry(state)
+        self.mission_map.update_uav_telemetry(state)
 
         rx = getattr(state, "rx_endpoint", None) or getattr(device, "rx_endpoint", None) or "--"
         tx = getattr(state, "tx_endpoint", None) or getattr(device, "tx_endpoint", None) or "--"
