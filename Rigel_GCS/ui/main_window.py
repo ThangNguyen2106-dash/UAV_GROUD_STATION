@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QSplitter,
     QScrollArea,
     QSizePolicy,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -32,6 +33,10 @@ except Exception:  # pragma: no cover - serial is optional at UI import time
     list_ports = None
 
 
+from Rigel_GCS.core.telemetry_logger import TelemetryLogger
+from Rigel_GCS.ui.controls.flight_control_panel import FlightControlPanel
+from Rigel_GCS.ui.map.map_widget import MapWidget
+from Rigel_GCS.ui.mission.mission_panel import MissionPanel
 from Rigel_GCS.ui.vehicle_panel.vehicle_panel import VehiclePanel
 
 
@@ -74,6 +79,7 @@ class MainWindow(QMainWindow):
         self.connection_manager = connection_manager
         self.selected_key: Optional[tuple[str, int, int]] = None
         self._updating_devices = False
+        self.logger = TelemetryLogger()
 
         self.setWindowTitle("RIGEL Ground Station")
         self.resize(1400, 850)
@@ -138,36 +144,37 @@ class MainWindow(QMainWindow):
         splitter.addWidget(sidebar_scroll)
 
         # --------------------------------------------------------
-        # RIGHT WORKSPACE - MAP / CONTROL RESERVED AREA
+        # RIGHT WORKSPACE - MAP + FLIGHT CONTROLS & MISSION
         # --------------------------------------------------------
-        workspace = QFrame()
-        workspace.setObjectName("workspace")
-        ws = QVBoxLayout(workspace)
-        ws.setContentsMargins(0, 0, 0, 0)
+        right_splitter = QSplitter(Qt.Horizontal)
+        right_splitter.setChildrenCollapsible(False)
 
-        title = QLabel("MAP / MISSION / VEHICLE CONTROL")
-        title.setObjectName("workspaceTitle")
-        title.setAlignment(Qt.AlignCenter)
-        ws.addWidget(title)
+        # Center Map
+        self.map_widget = MapWidget()
+        right_splitter.addWidget(self.map_widget)
 
-        hint = QLabel(
-            "Khu vực này được giữ riêng cho bản đồ, waypoint, mission "
-            "và các điều khiển cơ bản."
-        )
-        hint.setObjectName("workspaceHint")
-        hint.setAlignment(Qt.AlignCenter)
-        ws.addWidget(hint)
+        # Right Tabbed Panels (Controls & Mission Planner)
+        control_tabs = QTabWidget()
+        control_tabs.setMinimumWidth(320)
+        control_tabs.setMaximumWidth(420)
 
-        ws.addStretch(1)
+        self.flight_controls = FlightControlPanel(self.connection_manager)
+        control_tabs.addTab(self.flight_controls, "🎮 CONTROLS")
 
-        self.workspace_status = QLabel("No active vehicle")
-        self.workspace_status.setAlignment(Qt.AlignCenter)
-        self.workspace_status.setObjectName("workspaceStatus")
-        ws.addWidget(self.workspace_status)
-        ws.addStretch(1)
+        self.mission_panel = MissionPanel(self.connection_manager)
+        control_tabs.addTab(self.mission_panel, "📍 MISSION")
 
-        splitter.addWidget(workspace)
-        splitter.setSizes([370, 1000])
+        # Connect Mission Waypoint signals to Map Widget
+        self.mission_panel.waypoints_changed.connect(self.map_widget.update_waypoints_display)
+        self.map_widget.waypoint_clicked.connect(self.mission_panel.add_waypoint)
+
+        right_splitter.addWidget(control_tabs)
+        right_splitter.setSizes([850, 350])
+
+        splitter.addWidget(right_splitter)
+        splitter.setSizes([340, 1200])
+
+        self.workspace_status = QLabel("Ready")
 
     def _build_connection_box(self) -> QGroupBox:
         box = QGroupBox("LINK / CONNECTION")
@@ -380,6 +387,10 @@ class MainWindow(QMainWindow):
             return
 
         self.hud.update_telemetry(state)
+        self.map_widget.update_uav_telemetry(state)
+        self.flight_controls.update_telemetry(state)
+        self.mission_panel.update_telemetry(state)
+        self.logger.log_state(state)
 
 
     def _refresh_runtime(self) -> None:
@@ -451,6 +462,12 @@ class MainWindow(QMainWindow):
 
         self.selected_title.setText(f"Drone ID: {sysid}")
         self.hud.update_telemetry(state)
+        self.flight_controls.set_active_vehicle(self.selected_key)
+        self.mission_panel.set_active_vehicle(self.selected_key)
+        self.flight_controls.update_telemetry(state)
+        self.mission_panel.update_telemetry(state)
+        self.map_widget.update_uav_telemetry(state)
+
         rx = getattr(state, "rx_endpoint", None) or getattr(device, "rx_endpoint", None) or "--"
         tx = getattr(state, "tx_endpoint", None) or getattr(device, "tx_endpoint", None) or "--"
         self.selected_link.setText(f"Port: {transport}   |   RX: {rx}")
@@ -473,6 +490,8 @@ class MainWindow(QMainWindow):
         self.selected_title.setText("No vehicle selected")
         self.selected_link.setText("--")
         self.workspace_status.setText("No active vehicle")
+        self.flight_controls.set_active_vehicle(None)
+        self.mission_panel.set_active_vehicle(None)
         for label in self.telemetry_values.values():
             label.setText("--")
         self.last_update_label.setText("Last telemetry: --")
@@ -495,6 +514,8 @@ class MainWindow(QMainWindow):
         key = self.device_combo.itemData(index)
         if key is not None:
             self.selected_key = tuple(key)
+            self.flight_controls.set_active_vehicle(self.selected_key)
+            self.mission_panel.set_active_vehicle(self.selected_key)
             self._refresh_selected_telemetry()
         else:
             self.selected_key = None
@@ -528,6 +549,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:
         try:
+            self.logger.close()
             self.connection_manager.disconnect()
         except Exception:
             pass

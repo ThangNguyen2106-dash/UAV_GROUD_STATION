@@ -434,3 +434,180 @@ class ConnectionManager:
                 continue
             removed = self._remove_link(link.key) or removed
         return removed
+
+    # ---------------------------------------------------------
+    # MAVLINK COMMAND HELPERS
+    # ---------------------------------------------------------
+
+    def send_command_long(
+        self,
+        command: int,
+        param1: float = 0.0,
+        param2: float = 0.0,
+        param3: float = 0.0,
+        param4: float = 0.0,
+        param5: float = 0.0,
+        param6: float = 0.0,
+        param7: float = 0.0,
+        target_system: int = 1,
+        target_component: int = 1,
+        transport: Optional[str] = None,
+    ) -> bool:
+        """Pack and send a MAV_CMD via COMMAND_LONG."""
+        with self._lock:
+            links = list(self._links.values())
+
+        if not links:
+            print("[CMD ERROR] No active connection link.")
+            return False
+
+        target_link = None
+        if transport:
+            for l in links:
+                if l.kind.upper() == transport.upper():
+                    target_link = l
+                    break
+        if target_link is None:
+            target_link = links[0]
+
+        try:
+            msg = target_link.session._parser.command_long_encode(
+                int(target_system),
+                int(target_component),
+                int(command),
+                0,
+                float(param1),
+                float(param2),
+                float(param3),
+                float(param4),
+                float(param5),
+                float(param6),
+                float(param7),
+            )
+            return target_link.session.send_message(msg)
+        except Exception as exc:
+            print(f"[CMD SEND ERROR] {exc}")
+            return False
+
+    def arm_disarm(
+        self,
+        arm: bool,
+        force: bool = False,
+        target_system: int = 1,
+        target_component: int = 1,
+        transport: Optional[str] = None,
+    ) -> bool:
+        """Send MAV_CMD_COMPONENT_ARM_DISARM."""
+        param1 = 1.0 if arm else 0.0
+        param2 = 21196.0 if force else 0.0  # 21196 = force arm/disarm in ArduPilot
+        cmd = 400  # MAV_CMD_COMPONENT_ARM_DISARM
+        action = "ARM" if arm else "DISARM"
+        print(f"[ACTION] Sending {action} command to SYSID={target_system}")
+        return self.send_command_long(
+            command=cmd,
+            param1=param1,
+            param2=param2,
+            target_system=target_system,
+            target_component=target_component,
+            transport=transport,
+        )
+
+    def set_mode(
+        self,
+        mode_name: str,
+        target_system: int = 1,
+        target_component: int = 1,
+        transport: Optional[str] = None,
+    ) -> bool:
+        """Set vehicle flight mode."""
+        copter_modes = {
+            "STABILIZE": 0,
+            "ACRO": 1,
+            "ALT_HOLD": 2,
+            "AUTO": 3,
+            "GUIDED": 4,
+            "LOITER": 5,
+            "RTL": 6,
+            "CIRCLE": 7,
+            "LAND": 9,
+            "DRIFT": 11,
+            "SPORT": 13,
+            "FLIP": 14,
+            "AUTOTUNE": 15,
+            "POSHOLD": 16,
+            "BRAKE": 17,
+            "THROW": 18,
+            "GUIDED_NOGPS": 20,
+            "SMART_RTL": 21,
+        }
+
+        mode_upper = mode_name.upper().strip()
+        custom_mode = copter_modes.get(mode_upper)
+
+        if custom_mode is None:
+            print(f"[SET MODE ERROR] Unknown mode: {mode_name}")
+            return False
+
+        # MAV_CMD_DO_SET_MODE (176): param1 = MAV_MODE_FLAG_CUSTOM_MODE_ENABLED (1), param2 = custom_mode
+        print(f"[ACTION] Setting mode to {mode_upper} (custom_mode={custom_mode})")
+        return self.send_command_long(
+            command=176,
+            param1=1.0,
+            param2=float(custom_mode),
+            target_system=target_system,
+            target_component=target_component,
+            transport=transport,
+        )
+
+    def takeoff(
+        self,
+        altitude: float = 5.0,
+        target_system: int = 1,
+        target_component: int = 1,
+        transport: Optional[str] = None,
+    ) -> bool:
+        """Send MAV_CMD_NAV_TAKEOFF (22)."""
+        print(f"[ACTION] Sending TAKEOFF to alt={altitude:.1f}m")
+        return self.send_command_long(
+            command=22,
+            param7=float(altitude),
+            target_system=target_system,
+            target_component=target_component,
+            transport=transport,
+        )
+
+    def return_to_launch(
+        self,
+        target_system: int = 1,
+        target_component: int = 1,
+        transport: Optional[str] = None,
+    ) -> bool:
+        """Send MAV_CMD_NAV_RETURN_TO_LAUNCH (20) or set RTL mode."""
+        print("[ACTION] Sending Return To Launch (RTL)")
+        res = self.send_command_long(
+            command=20,
+            target_system=target_system,
+            target_component=target_component,
+            transport=transport,
+        )
+        if not res:
+            res = self.set_mode("RTL", target_system, target_component, transport)
+        return res
+
+    def land(
+        self,
+        target_system: int = 1,
+        target_component: int = 1,
+        transport: Optional[str] = None,
+    ) -> bool:
+        """Send MAV_CMD_NAV_LAND (21) or set LAND mode."""
+        print("[ACTION] Sending LAND command")
+        res = self.send_command_long(
+            command=21,
+            target_system=target_system,
+            target_component=target_component,
+            transport=transport,
+        )
+        if not res:
+            res = self.set_mode("LAND", target_system, target_component, transport)
+        return res
