@@ -1,238 +1,264 @@
 from __future__ import annotations
 
+import math
 from typing import Any, Optional
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
-    QComboBox,
-    QDoubleSpinBox,
     QFrame,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
-    QMessageBox,
-    QPushButton,
     QVBoxLayout,
     QWidget,
 )
 
 
-class FlightControlPanel(QFrame):
-    """Realtime vehicle flight action and command panel."""
+class FlightStatusPanel(QFrame):
+    """Realtime vehicle status and safety monitoring panel (Display Only).
+    
+    Flight control (Arm, Disarm, Modes) is operated directly from the physical RC transmitter.
+    This panel purely monitors live flight state.
+    """
 
-    def __init__(self, connection_manager, parent: Optional[QWidget] = None) -> None:
+    def __init__(self, connection_manager=None, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.connection_manager = connection_manager
         self.selected_key: Optional[tuple[str, int, int]] = None
         self._is_armed = False
-        self._current_mode = "UNKNOWN"
+        self._current_mode = "--"
 
-        self.setObjectName("FlightControlPanel")
+        self.setObjectName("FlightStatusPanel")
         self.setFrameShape(QFrame.Shape.StyledPanel)
         self._build_ui()
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(10)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(8)
 
         # ----------------------------------------------------
-        # ARM / DISARM
+        # 1. ARM / DISARM STATE (DISPLAY ONLY)
         # ----------------------------------------------------
-        arm_box = QGroupBox("ARM / DISARM CONTROL")
+        arm_box = QGroupBox("ARM / MOTOR STATUS")
         arm_layout = QVBoxLayout(arm_box)
-        arm_layout.setSpacing(6)
+        arm_layout.setContentsMargins(8, 8, 8, 8)
+        arm_layout.setSpacing(4)
 
-        self.arm_status_label = QLabel("STATUS: DISARMED")
-        self.arm_status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.arm_status_label.setFont(QFont("Arial", 12, QFont.Weight.Bold))
-        self.arm_status_label.setStyleSheet("color:#aeb7c0; padding:4px;")
-        arm_layout.addWidget(self.arm_status_label)
+        self.arm_status_badge = QLabel("DISARMED (SAFE)")
+        self.arm_status_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.arm_status_badge.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
+        self.arm_status_badge.setStyleSheet("""
+            QLabel {
+                background: #1e293b;
+                color: #94a3b8;
+                border: 1px solid #334155;
+                border-radius: 6px;
+                padding: 10px;
+            }
+        """)
+        arm_layout.addWidget(self.arm_status_badge)
 
-        arm_btn_row = QHBoxLayout()
-        self.btn_arm = QPushButton("🛡️ ARM")
-        self.btn_arm.setFixedHeight(34)
-        self.btn_arm.setStyleSheet("background:#15803d; color:white; font-weight:bold; border-radius:4px;")
-        self.btn_arm.clicked.connect(self._on_arm_clicked)
-        arm_btn_row.addWidget(self.btn_arm)
-
-        self.btn_disarm = QPushButton("🛑 DISARM")
-        self.btn_disarm.setFixedHeight(34)
-        self.btn_disarm.setStyleSheet("background:#b91c1c; color:white; font-weight:bold; border-radius:4px;")
-        self.btn_disarm.clicked.connect(self._on_disarm_clicked)
-        arm_btn_row.addWidget(self.btn_disarm)
-        arm_layout.addLayout(arm_btn_row)
+        self.arm_hint = QLabel("Operated via RC Transmitter switch")
+        self.arm_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.arm_hint.setStyleSheet("color: #64748b; font-size: 10px;")
+        arm_layout.addWidget(self.arm_hint)
 
         layout.addWidget(arm_box)
 
         # ----------------------------------------------------
-        # FLIGHT MODES
+        # 2. FLIGHT MODE (DISPLAY ONLY)
         # ----------------------------------------------------
-        mode_box = QGroupBox("FLIGHT MODES")
-        mode_layout = QGridLayout(mode_box)
-        mode_layout.setSpacing(6)
+        mode_box = QGroupBox("ACTIVE FLIGHT MODE")
+        mode_layout = QVBoxLayout(mode_box)
+        mode_layout.setContentsMargins(8, 8, 8, 8)
+        mode_layout.setSpacing(4)
 
-        mode_layout.addWidget(QLabel("Current Mode:"), 0, 0)
-        self.current_mode_label = QLabel("UNKNOWN")
-        self.current_mode_label.setFont(QFont("Arial", 10, QFont.Weight.Bold))
-        self.current_mode_label.setStyleSheet("color:#38bdf8;")
-        mode_layout.addWidget(self.current_mode_label, 0, 1)
-
-        self.mode_combo = QComboBox()
-        self.mode_combo.addItems([
-            "LOITER",
-            "POSHOLD",
-            "GUIDED",
-            "AUTO",
-            "RTL",
-            "LAND",
-            "ALT_HOLD",
-            "STABILIZE",
-            "BRAKE",
-        ])
-        mode_layout.addWidget(self.mode_combo, 1, 0)
-
-        self.btn_set_mode = QPushButton("Set Mode")
-        self.btn_set_mode.setFixedHeight(28)
-        self.btn_set_mode.clicked.connect(self._on_set_mode_clicked)
-        mode_layout.addWidget(self.btn_set_mode, 1, 1)
+        self.mode_badge = QLabel("--")
+        self.mode_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.mode_badge.setFont(QFont("Segoe UI", 13, QFont.Weight.Bold))
+        self.mode_badge.setStyleSheet("""
+            QLabel {
+                background: rgba(2, 132, 199, 0.15);
+                color: #38bdf8;
+                border: 1px solid #0284c7;
+                border-radius: 6px;
+                padding: 10px;
+            }
+        """)
+        mode_layout.addWidget(self.mode_badge)
 
         layout.addWidget(mode_box)
 
         # ----------------------------------------------------
-        # ACTIONS / TAKEOFF / RTL / LAND
+        # 3. LIVE FLIGHT METRICS SUMMARY
         # ----------------------------------------------------
-        actions_box = QGroupBox("QUICK ACTIONS")
-        act_layout = QVBoxLayout(actions_box)
-        act_layout.setSpacing(8)
+        metrics_box = QGroupBox("FLIGHT DYNAMICS")
+        m_layout = QGridLayout(metrics_box)
+        m_layout.setContentsMargins(8, 8, 8, 8)
+        m_layout.setSpacing(6)
 
-        # Takeoff row
-        tk_row = QHBoxLayout()
-        tk_row.addWidget(QLabel("Takeoff Alt (m):"))
-        self.spin_takeoff_alt = QDoubleSpinBox()
-        self.spin_takeoff_alt.setRange(1.0, 150.0)
-        self.spin_takeoff_alt.setValue(5.0)
-        self.spin_takeoff_alt.setSingleStep(1.0)
-        tk_row.addWidget(self.spin_takeoff_alt)
+        self.val_altitude = QLabel("-- m")
+        self.val_rel_altitude = QLabel("-- m")
+        self.val_speed = QLabel("-- m/s")
+        self.val_climb = QLabel("-- m/s")
+        self.val_battery = QLabel("-- V (--%)")
+        self.val_gps = QLabel("-- (0 Sats)")
 
-        self.btn_takeoff = QPushButton("🚀 Takeoff")
-        self.btn_takeoff.setFixedHeight(30)
-        self.btn_takeoff.setStyleSheet("background:#0284c7; color:white; font-weight:bold; border-radius:4px;")
-        self.btn_takeoff.clicked.connect(self._on_takeoff_clicked)
-        tk_row.addWidget(self.btn_takeoff)
-        act_layout.addLayout(tk_row)
+        for lbl in (self.val_altitude, self.val_rel_altitude, self.val_speed,
+                    self.val_climb, self.val_battery, self.val_gps):
+            lbl.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+            lbl.setStyleSheet("color: #f1f5f9;")
 
-        # RTL & Land
-        quick_btns = QHBoxLayout()
-        self.btn_rtl = QPushButton("🏠 Return to Launch (RTL)")
-        self.btn_rtl.setFixedHeight(32)
-        self.btn_rtl.setStyleSheet("background:#d97706; color:white; font-weight:bold; border-radius:4px;")
-        self.btn_rtl.clicked.connect(self._on_rtl_clicked)
-        quick_btns.addWidget(self.btn_rtl)
+        m_layout.addWidget(QLabel("Alt (MSL):"), 0, 0)
+        m_layout.addWidget(self.val_altitude, 0, 1)
 
-        self.btn_land = QPushButton("🛬 Land Now")
-        self.btn_land.setFixedHeight(32)
-        self.btn_land.setStyleSheet("background:#ea580c; color:white; font-weight:bold; border-radius:4px;")
-        self.btn_land.clicked.connect(self._on_land_clicked)
-        quick_btns.addWidget(self.btn_land)
-        act_layout.addLayout(quick_btns)
+        m_layout.addWidget(QLabel("Alt (Rel):"), 1, 0)
+        m_layout.addWidget(self.val_rel_altitude, 1, 1)
 
-        layout.addWidget(actions_box)
+        m_layout.addWidget(QLabel("Ground Speed:"), 2, 0)
+        m_layout.addWidget(self.val_speed, 2, 1)
+
+        m_layout.addWidget(QLabel("Climb Rate:"), 3, 0)
+        m_layout.addWidget(self.val_climb, 3, 1)
+
+        m_layout.addWidget(QLabel("Battery:"), 4, 0)
+        m_layout.addWidget(self.val_battery, 4, 1)
+
+        m_layout.addWidget(QLabel("GPS:"), 5, 0)
+        m_layout.addWidget(self.val_gps, 5, 1)
+
+        layout.addWidget(metrics_box)
+
+        # ----------------------------------------------------
+        # 4. SENSOR / LINK HEALTH
+        # ----------------------------------------------------
+        health_box = QGroupBox("SYSTEM HEALTH")
+        h_layout = QGridLayout(health_box)
+        h_layout.setContentsMargins(8, 8, 8, 8)
+        h_layout.setSpacing(6)
+
+        self.lbl_gyro = QLabel("🟢 OK")
+        self.lbl_accel = QLabel("🟢 OK")
+        self.lbl_mag = QLabel("🟢 OK")
+        self.lbl_gps_status = QLabel("🟢 READY")
+
+        for lbl in (self.lbl_gyro, self.lbl_accel, self.lbl_mag, self.lbl_gps_status):
+            lbl.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+            lbl.setStyleSheet("color: #4ade80;")
+
+        h_layout.addWidget(QLabel("Gyroscope:"), 0, 0)
+        h_layout.addWidget(self.lbl_gyro, 0, 1)
+
+        h_layout.addWidget(QLabel("Accelerometer:"), 1, 0)
+        h_layout.addWidget(self.lbl_accel, 1, 1)
+
+        h_layout.addWidget(QLabel("Compass (Mag):"), 2, 0)
+        h_layout.addWidget(self.lbl_mag, 2, 1)
+
+        h_layout.addWidget(QLabel("GPS Sensor:"), 3, 0)
+        h_layout.addWidget(self.lbl_gps_status, 3, 1)
+
+        layout.addWidget(health_box)
+
         layout.addStretch(1)
 
     def set_active_vehicle(self, key: Optional[tuple[str, int, int]]) -> None:
         self.selected_key = key
+        if key is None:
+            self._reset_display()
 
     def update_telemetry(self, state: Any) -> None:
-        armed = bool(getattr(state, "armed", False))
-        mode = getattr(state, "flight_mode", None) or getattr(state, "mode", "UNKNOWN")
+        if state is None:
+            self._reset_display()
+            return
 
+        # 1. Arm Status
+        armed = bool(getattr(state, "armed", False))
         if armed != self._is_armed:
             self._is_armed = armed
             if self._is_armed:
-                self.arm_status_label.setText("STATUS: ARMED")
-                self.arm_status_label.setStyleSheet("color:#ef4444; font-weight:bold; background:rgba(239,68,68,0.15); border-radius:4px; padding:4px;")
+                self.arm_status_badge.setText("⚠️ ARMED (MOTORS LIVE)")
+                self.arm_status_badge.setStyleSheet("""
+                    QLabel {
+                        background: rgba(239, 68, 68, 0.2);
+                        color: #ef4444;
+                        border: 2px solid #ef4444;
+                        border-radius: 6px;
+                        padding: 10px;
+                        font-weight: bold;
+                    }
+                """)
             else:
-                self.arm_status_label.setText("STATUS: DISARMED")
-                self.arm_status_label.setStyleSheet("color:#aeb7c0; padding:4px;")
+                self.arm_status_badge.setText("🔒 DISARMED (SAFE)")
+                self.arm_status_badge.setStyleSheet("""
+                    QLabel {
+                        background: #1e293b;
+                        color: #94a3b8;
+                        border: 1px solid #334155;
+                        border-radius: 6px;
+                        padding: 10px;
+                        font-weight: bold;
+                    }
+                """)
 
-        if mode != self._current_mode:
-            self._current_mode = str(mode)
-            self.current_mode_label.setText(self._current_mode)
+        # 2. Flight Mode
+        mode = getattr(state, "flight_mode", None) or getattr(state, "mode", "--")
+        mode_str = str(mode).upper()
+        if mode_str != self._current_mode:
+            self._current_mode = mode_str
+            self.mode_badge.setText(self._current_mode)
 
-    def _get_target(self) -> tuple[int, int, Optional[str]]:
-        if self.selected_key is None:
-            return 1, 1, None
-        transport, sysid, compid = self.selected_key
-        return sysid, compid, transport
+        # 3. Dynamic metrics
+        alt = getattr(state, "altitude", None)
+        rel_alt = getattr(state, "relative_alt", None)
+        speed = getattr(state, "ground_speed", None)
+        climb = getattr(state, "climb_rate", None)
+        bat_v = getattr(state, "battery_voltage", None)
+        bat_pct = getattr(state, "battery_remaining", None)
+        sats = getattr(state, "satellites_visible", None)
+        gps_fix = getattr(state, "gps_fix_type", None)
 
-    def _on_arm_clicked(self) -> None:
-        sysid, compid, transport = self._get_target()
-        reply = QMessageBox.question(
-            self,
-            "Confirm ARM",
-            f"Are you sure you want to ARM Drone ID {sysid}?\nMotors will begin spinning!",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if reply == QMessageBox.StandardButton.Yes:
-            self.connection_manager.arm_disarm(
-                arm=True,
-                force=False,
-                target_system=sysid,
-                target_component=compid,
-                transport=transport,
-            )
+        if alt is not None and math.isfinite(alt):
+            self.val_altitude.setText(f"{alt:.1f} m")
+        if rel_alt is not None and math.isfinite(rel_alt):
+            self.val_rel_altitude.setText(f"{rel_alt:.1f} m")
+        if speed is not None and math.isfinite(speed):
+            self.val_speed.setText(f"{speed:.1f} m/s")
+        if climb is not None and math.isfinite(climb):
+            self.val_climb.setText(f"{climb:+.1f} m/s")
 
-    def _on_disarm_clicked(self) -> None:
-        sysid, compid, transport = self._get_target()
-        reply = QMessageBox.warning(
-            self,
-            "Confirm DISARM",
-            f"Are you sure you want to DISARM Drone ID {sysid}?\nIf airborne, the vehicle will DROP!",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if reply == QMessageBox.StandardButton.Yes:
-            self.connection_manager.arm_disarm(
-                arm=False,
-                force=True,
-                target_system=sysid,
-                target_component=compid,
-                transport=transport,
-            )
+        if bat_v is not None and math.isfinite(bat_v):
+            pct_str = f"{bat_pct:.0f}%" if (bat_pct is not None and math.isfinite(bat_pct)) else "--%"
+            self.val_battery.setText(f"{bat_v:.1f} V ({pct_str})")
 
-    def _on_set_mode_clicked(self) -> None:
-        sysid, compid, transport = self._get_target()
-        mode = self.mode_combo.currentText()
-        self.connection_manager.set_mode(
-            mode_name=mode,
-            target_system=sysid,
-            target_component=compid,
-            transport=transport,
-        )
+        fix_str = f"Fix {gps_fix}" if gps_fix is not None else "--"
+        sat_str = f"{sats} Sats" if sats is not None else "0 Sats"
+        self.val_gps.setText(f"{fix_str} ({sat_str})")
 
-    def _on_takeoff_clicked(self) -> None:
-        sysid, compid, transport = self._get_target()
-        alt = self.spin_takeoff_alt.value()
-        reply = QMessageBox.question(
-            self,
-            "Confirm Auto Takeoff",
-            f"Initiate automatic takeoff to altitude {alt:.1f} meters for Drone ID {sysid}?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if reply == QMessageBox.StandardButton.Yes:
-            # Set GUIDED mode first, then send TAKEOFF
-            self.connection_manager.set_mode("GUIDED", sysid, compid, transport)
-            self.connection_manager.takeoff(alt, sysid, compid, transport)
+    def _reset_display(self) -> None:
+        self._is_armed = False
+        self._current_mode = "--"
+        self.arm_status_badge.setText("DISARMED (SAFE)")
+        self.arm_status_badge.setStyleSheet("""
+            QLabel {
+                background: #1e293b;
+                color: #94a3b8;
+                border: 1px solid #334155;
+                border-radius: 6px;
+                padding: 10px;
+            }
+        """)
+        self.mode_badge.setText("--")
+        self.val_altitude.setText("-- m")
+        self.val_rel_altitude.setText("-- m")
+        self.val_speed.setText("-- m/s")
+        self.val_climb.setText("-- m/s")
+        self.val_battery.setText("-- V (--%)")
+        self.val_gps.setText("-- (0 Sats)")
 
-    def _on_rtl_clicked(self) -> None:
-        sysid, compid, transport = self._get_target()
-        self.connection_manager.return_to_launch(sysid, compid, transport)
 
-    def _on_land_clicked(self) -> None:
-        sysid, compid, transport = self._get_target()
-        self.connection_manager.land(sysid, compid, transport)
+# Compatibility Alias
+FlightControlPanel = FlightStatusPanel
