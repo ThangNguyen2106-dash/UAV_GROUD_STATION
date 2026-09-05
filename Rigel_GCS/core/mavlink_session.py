@@ -121,12 +121,12 @@ class MAVLinkSession:
 
         # 1. Standard ArduPilot / APM Data Streams (REQUEST_DATA_STREAM)
         stream_requests = [
-            (getattr(mavutil.mavlink, "MAV_DATA_STREAM_EXTRA1", 10), 20),           # ATTITUDE (20 Hz)
-            (getattr(mavutil.mavlink, "MAV_DATA_STREAM_EXTRA2", 11), 10),           # VFR_HUD (10 Hz)
-            (getattr(mavutil.mavlink, "MAV_DATA_STREAM_POSITION", 6), 10),          # GLOBAL_POSITION_INT (10 Hz)
+            (getattr(mavutil.mavlink, "MAV_DATA_STREAM_EXTRA1", 10), 30),           # ATTITUDE (30 Hz)
+            (getattr(mavutil.mavlink, "MAV_DATA_STREAM_EXTRA2", 11), 15),           # VFR_HUD (15 Hz)
+            (getattr(mavutil.mavlink, "MAV_DATA_STREAM_POSITION", 6), 15),          # GLOBAL_POSITION_INT (15 Hz)
             (getattr(mavutil.mavlink, "MAV_DATA_STREAM_EXTENDED_STATUS", 2), 2),    # SYS_STATUS, GPS_RAW (2 Hz)
             (getattr(mavutil.mavlink, "MAV_DATA_STREAM_RAW_SENSORS", 1), 2),        # IMU RAW (2 Hz)
-            (getattr(mavutil.mavlink, "MAV_DATA_STREAM_ALL", 0), 10),               # ALL (10 Hz fallback)
+            (getattr(mavutil.mavlink, "MAV_DATA_STREAM_ALL", 0), 15),               # ALL (15 Hz fallback)
         ]
         for stream_id, rate_hz in stream_requests:
             try:
@@ -145,12 +145,12 @@ class MAVLinkSession:
         # 2. Modern MAV_CMD_SET_MESSAGE_INTERVAL
         cmd = getattr(mavutil.mavlink, "MAV_CMD_SET_MESSAGE_INTERVAL", 511)
         requests = [
-            (getattr(mavutil.mavlink, "MAVLINK_MSG_ID_GLOBAL_POSITION_INT", 33), 100000),  # 10 Hz
+            (getattr(mavutil.mavlink, "MAVLINK_MSG_ID_GLOBAL_POSITION_INT", 33), 66666),   # 15 Hz
             (getattr(mavutil.mavlink, "MAVLINK_MSG_ID_GPS_RAW_INT", 24), 200000),           # 5 Hz
-            (getattr(mavutil.mavlink, "MAVLINK_MSG_ID_ATTITUDE", 30), 50000),                # 20 Hz
+            (getattr(mavutil.mavlink, "MAVLINK_MSG_ID_ATTITUDE", 30), 33333),                # 30 Hz
             (getattr(mavutil.mavlink, "MAVLINK_MSG_ID_SYS_STATUS", 1), 500000),              # 2 Hz
             (getattr(mavutil.mavlink, "MAVLINK_MSG_ID_BATTERY_STATUS", 147), 500000),        # 2 Hz
-            (getattr(mavutil.mavlink, "MAVLINK_MSG_ID_VFR_HUD", 74), 200000),                # 5 Hz
+            (getattr(mavutil.mavlink, "MAVLINK_MSG_ID_VFR_HUD", 74), 100000),                # 10 Hz
             (getattr(mavutil.mavlink, "MAVLINK_MSG_ID_HOME_POSITION", 242), 1000000),        # 1 Hz
         ]
         for msg_id, interval_us in requests:
@@ -175,42 +175,30 @@ class MAVLinkSession:
 
     def feed_bytes(self, data: bytes) -> int:
         """
-        Feed raw MAVLink bytes into the parser.
+        Feed raw MAVLink bytes into the parser using optimized buffer parsing.
 
         Returns:
             Number of MAVLink messages parsed.
         """
-
         if not data:
             return 0
 
         if not isinstance(data, bytes):
-            raise TypeError(
-                "MAVLinkSession.feed_bytes() requires bytes"
-            )
+            raise TypeError("MAVLinkSession.feed_bytes() requires bytes")
 
         self.byte_count += len(data)
-
         parsed = 0
 
-        for byte in data:
+        try:
+            messages = self._parser.parse_buffer(data)
+        except Exception as exc:
+            print(f"[MAVLINK PARSE ERROR] {exc}")
+            messages = None
 
-            try:
-                message = self._parser.parse_char(
-                    bytes([byte])
-                )
-
-            except Exception as exc:
-                print(
-                    f"[MAVLINK PARSE ERROR] {exc}"
-                )
-                continue
-
-            if message is None:
-                continue
-
-            parsed += 1
-            self._handle_message(message)
+        if messages:
+            for message in messages:
+                parsed += 1
+                self._handle_message(message)
 
         return parsed
 

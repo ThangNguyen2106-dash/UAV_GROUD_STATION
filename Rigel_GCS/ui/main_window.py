@@ -67,7 +67,7 @@ class MainWindow(QMainWindow):
     """
 
     POLL_MS = 250
-    HUD_POLL_MS = 25
+    HUD_POLL_MS = 16
 
     def __init__(self, connection_manager) -> None:
         super().__init__()
@@ -92,10 +92,10 @@ class MainWindow(QMainWindow):
         self.timer.start()
 
         # ============================================================
-        # REALTIME HUD TIMER
+        # REALTIME HUD TIMER (60 FPS)
         # ============================================================
         self.hud_timer = QTimer(self)
-        self.hud_timer.setInterval(self.HUD_POLL_MS)   # 40 Hz
+        self.hud_timer.setInterval(self.HUD_POLL_MS)   # 60 FPS
         self.hud_timer.timeout.connect(self._refresh_hud)
         self.hud_timer.start()
 

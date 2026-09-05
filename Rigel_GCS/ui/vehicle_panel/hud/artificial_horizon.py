@@ -3,8 +3,8 @@ from __future__ import annotations
 import math
 from typing import Optional
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPen
+from PySide6.QtCore import QPointF, Qt
+from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import QWidget
 
 
@@ -331,9 +331,6 @@ class ArtificialHorizon(QWidget):
                         int(-marker_radius + radius * 0.085),
                     ),
                 ]
-
-                from PySide6.QtGui import QPolygonF
-                from PySide6.QtCore import QPointF
 
                 polygon = QPolygonF(
                     [QPointF(float(x), float(y)) for x, y in pointer]
