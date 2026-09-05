@@ -369,6 +369,17 @@ class MAVLinkSession:
     # RESET
     # ==========================================================
 
+    def mark_link_lost(self) -> None:
+        """Called when heartbeat is lost while the transport link stays open.
+
+        Clears telemetry-request dedupe so a flight-controller reboot (which
+        resets its message-interval config) gets re-requested once the
+        heartbeat resumes, instead of being silently skipped forever.
+        """
+
+        self._connected = False
+        self._telemetry_requested_for.clear()
+
     def reset(self) -> None:
 
         self.target_system = None

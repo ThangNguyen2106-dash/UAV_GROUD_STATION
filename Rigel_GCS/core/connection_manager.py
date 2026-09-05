@@ -285,6 +285,7 @@ class ConnectionManager:
                     link.session.request_telemetry(link.session.target_system, link.session.target_component)
             elif not is_alive and link.ready:
                 link.ready = False
+                link.session.mark_link_lost()
                 print(f"[CONNECTION STATE] HEARTBEAT_TIMEOUT (NO VEHICLE HEARTBEAT FOR {self.link_lost_timeout:.1f}s) | {link.key}")
                 self._refresh_global_state()
 

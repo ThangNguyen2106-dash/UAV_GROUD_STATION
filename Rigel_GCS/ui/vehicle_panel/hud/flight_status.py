@@ -21,9 +21,7 @@ class FlightStatus(QWidget):
 
     def update_state(self, state: Any) -> None:
         armed = getattr(state, "armed", None)
-        mode = getattr(state, "flight_mode", None)
-        if mode is None:
-            mode = getattr(state, "mode", None)
+        mode = getattr(state, "custom_mode", None)
         fix = getattr(state, "fix_type", None)
         sats = getattr(state, "satellites_visible", None)
         connected = bool(getattr(state, "connected", False))

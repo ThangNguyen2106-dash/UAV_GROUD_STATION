@@ -210,10 +210,6 @@ class ActiveVehicleManager:
                 ):
                     self._active = None
 
-            # Never silently choose one of many.
-            if len(self._candidates) != 1:
-                self._active = None
-
         return list(self._candidates)
 
     # ------------------------------------------------------------------
