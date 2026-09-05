@@ -138,88 +138,68 @@ class MainWindow(QMainWindow):
         # ========================================================
         # TAB 1: 📊 DATA (FLIGHT DATA & LIVE MONITORING)
         # ========================================================
+        # TAB 1: 🛰️ FLIGHT DATA (LEFT: HUD & INSTRUMENTS | RIGHT: TACTICAL MAP)
+        # ========================================================
         tab_data = QWidget()
         data_layout = QHBoxLayout(tab_data)
         data_layout.setContentsMargins(0, 2, 0, 0)
-        data_layout.setSpacing(8)
+        data_layout.setSpacing(6)
 
         data_splitter = QSplitter(Qt.Horizontal)
         data_splitter.setChildrenCollapsible(False)
 
-        # Left Sidebar (Vehicle HUD + Safety Banner + Camera Feed)
-        sidebar = QWidget()
-        sidebar.setMinimumWidth(290)
-        sidebar.setMaximumWidth(380)
-        side = QVBoxLayout(sidebar)
-        side.setContentsMargins(0, 0, 0, 0)
-        side.setSpacing(8)
+        # 1. Left Column: Cockpit Instruments Stack (HUD, Safety, Camera, State, Telemetry)
+        left_panel = QWidget()
+        left_panel.setMinimumWidth(300)
+        left_panel.setMaximumWidth(390)
+        left_layout = QVBoxLayout(left_panel)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(6)
 
-        # Primary Flight Display / HUD
-        side.addWidget(self._build_hud_box())
+        # A. Primary Flight Display (HUD - Expands dynamically)
+        self.hud_box = self._build_hud_box()
+        left_layout.addWidget(self.hud_box, 1)
 
-        # Safety Alert Banner
+        # B. Safety Alert Banner
         self.safety_banner = SafetyBannerWidget()
-        side.addWidget(self.safety_banner)
+        left_layout.addWidget(self.safety_banner)
 
-        # Dedicated FPV / Camera Video Feed Slot
+        # C. FPV / Camera Video Feed Slot (Expands dynamically)
         self.camera_feed = CameraFeedWidget()
-        side.addWidget(self.camera_feed)
-        side.addStretch(1)
+        left_layout.addWidget(self.camera_feed, 1)
 
-        sidebar_scroll = QScrollArea()
-        sidebar_scroll.setWidgetResizable(True)
-        sidebar_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        sidebar_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        sidebar_scroll.setWidget(sidebar)
-        data_splitter.addWidget(sidebar_scroll)
+        # D. Vehicle State Badge (Arm / Mode)
+        self.flight_controls = FlightControlPanel(self.connection_manager)
+        left_layout.addWidget(self.flight_controls)
 
-        # Center/Right of Tab 1: Map + Status Console (Center) and Cockpit Cards + Status (Right)
-        data_center_splitter = QSplitter(Qt.Horizontal)
-        data_center_splitter.setChildrenCollapsible(False)
+        # E. Cockpit Telemetry & Sensors Card (Compact and snug)
+        self.telemetry_cards = TelemetryCardsWidget()
+        left_layout.addWidget(self.telemetry_cards)
 
-        # Center Column: Tactical Map (Top) + MAVLink Status Console (Bottom)
-        center_container = QWidget()
-        center_layout = QVBoxLayout(center_container)
-        center_layout.setContentsMargins(0, 0, 0, 0)
-        center_layout.setSpacing(6)
+        data_splitter.addWidget(left_panel)
+
+        # 2. Right Area: Expansive Tactical Satellite Map + Compact Status Console
+        map_container = QWidget()
+        map_layout = QVBoxLayout(map_container)
+        map_layout.setContentsMargins(0, 0, 0, 0)
+        map_layout.setSpacing(4)
 
         self.data_map = MapWidget(enable_waypoint_click=False)
-        center_layout.addWidget(self.data_map, 1)
+        map_layout.addWidget(self.data_map, 1)
 
         self.status_console = StatusConsoleWidget()
-        center_layout.addWidget(self.status_console)
+        self.status_console.setMaximumHeight(100)
+        map_layout.addWidget(self.status_console)
 
-        data_center_splitter.addWidget(center_container)
-
-        # Right Column: Cockpit Telemetry Cards (Top) + Vehicle Safety Status Panel (Bottom)
-        right_sidebar = QWidget()
-        right_sidebar.setMinimumWidth(290)
-        right_sidebar.setMaximumWidth(360)
-        right_layout = QVBoxLayout(right_sidebar)
-        right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(8)
-
-        self.telemetry_cards = TelemetryCardsWidget()
-        right_layout.addWidget(self.telemetry_cards)
-
-        self.flight_controls = FlightControlPanel(self.connection_manager)
-        right_layout.addWidget(self.flight_controls)
-        right_layout.addStretch(1)
-
-        right_scroll = QScrollArea()
-        right_scroll.setWidgetResizable(True)
-        right_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        right_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        right_scroll.setWidget(right_sidebar)
-
-        data_center_splitter.addWidget(right_scroll)
-        data_center_splitter.setSizes([850, 310])
-
-        data_splitter.addWidget(data_center_splitter)
-        data_splitter.setSizes([320, 1120])
+        data_splitter.addWidget(map_container)
+        data_splitter.setSizes([340, 1160])
         data_layout.addWidget(data_splitter)
 
         self.main_tabs.addTab(tab_data, "FLIGHT DATA")
+
+
+
+
 
         # ========================================================
         # TAB 2: 📍 MISSION (MISSION PLANNER & WAYPOINT EDITOR)
@@ -253,6 +233,22 @@ class MainWindow(QMainWindow):
         # 2. When waypoints change in Mission Panel: sync to BOTH Mission Map and Data Map!
         self.mission_panel.waypoints_changed.connect(self.mission_map.update_waypoints_display)
         self.mission_panel.waypoints_changed.connect(self.data_map.update_waypoints_display)
+
+        # 3. Synchronize Map Controls, Layers, and Flight Trail between Data Map and Mission Map
+        self.data_map.trail_cleared.connect(lambda: self.mission_map.clear_flight_trail(emit_signal=False))
+        self.mission_map.trail_cleared.connect(lambda: self.data_map.clear_flight_trail(emit_signal=False))
+
+        self.data_map.nfz_toggled.connect(lambda v: self.mission_map.set_nfz_visible(v, emit_signal=False))
+        self.mission_map.nfz_toggled.connect(lambda v: self.data_map.set_nfz_visible(v, emit_signal=False))
+
+        self.data_map.border_toggled.connect(lambda v: self.mission_map.set_border_visible(v, emit_signal=False))
+        self.mission_map.border_toggled.connect(lambda v: self.data_map.set_border_visible(v, emit_signal=False))
+
+        self.data_map.follow_toggled.connect(lambda v: self.mission_map.set_follow(v, emit_signal=False))
+        self.mission_map.follow_toggled.connect(lambda v: self.data_map.set_follow(v, emit_signal=False))
+
+        self.data_map.nfz_alert.connect(lambda msg: self.status_console.add_message(msg, 2))
+        self.mission_map.nfz_alert.connect(lambda msg: self.status_console.add_message(msg, 2))
 
         self.workspace_status = QLabel("Ready")
 
@@ -494,6 +490,10 @@ class MainWindow(QMainWindow):
                     color: #e2e8f0;
                 }
             """)
+            if hasattr(self, "data_map"):
+                self.data_map.refresh_view()
+            if hasattr(self, "data_map") and hasattr(self, "mission_panel"):
+                self.data_map.update_waypoints_display(self.mission_panel._waypoints)
         else:
             self.btn_tab_data.setStyleSheet("""
                 QPushButton {
@@ -518,17 +518,22 @@ class MainWindow(QMainWindow):
                     padding: 0 14px;
                 }
             """)
+            if hasattr(self, "mission_map"):
+                self.mission_map.refresh_view()
+            if hasattr(self, "mission_map") and hasattr(self, "mission_panel"):
+                self.mission_map.update_waypoints_display(self.mission_panel._waypoints)
 
     def _build_hud_box(self) -> QGroupBox:
-        box = QGroupBox("PRIMARY FLIGHT DISPLAY (HUD)")
+        box = QGroupBox("HUD (ATTITUDE)")
+        box.setStyleSheet("QGroupBox { font-size: 8.5pt; font-weight: bold; }")
         layout = QVBoxLayout(box)
-        layout.setContentsMargins(4, 4, 4, 4)
-        layout.setSpacing(4)
+        layout.setContentsMargins(2, 2, 2, 2)
+        layout.setSpacing(2)
         self.hud = VehiclePanel()
-        self.hud.setMinimumWidth(250)
-        self.hud.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.hud.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         layout.addWidget(self.hud)
         return box
+
 
     # ============================================================
     # CONNECTION ACTIONS

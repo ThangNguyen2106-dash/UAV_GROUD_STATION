@@ -29,12 +29,12 @@ class HUDWidget(QFrame):
         """)
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(4, 4, 4, 4)
-        root.setSpacing(3)
+        root.setContentsMargins(3, 3, 3, 3)
+        root.setSpacing(2)
 
         # 1. Artificial Horizon (Attitude Indicator)
         self.horizon = ArtificialHorizon()
-        root.addWidget(self.horizon)
+        root.addWidget(self.horizon, 1)
 
         # 2. Compass Tape
         self.compass = Compass()
@@ -42,22 +42,23 @@ class HUDWidget(QFrame):
 
         # 3. Compact Attitude Angles Readout Strip
         readout_layout = QGridLayout()
-        readout_layout.setContentsMargins(4, 2, 4, 2)
-        readout_layout.setHorizontalSpacing(8)
+        readout_layout.setContentsMargins(2, 1, 2, 1)
+        readout_layout.setHorizontalSpacing(4)
 
         self.lbl_roll = QLabel("ROLL: 0.0°")
         self.lbl_pitch = QLabel("PITCH: 0.0°")
         self.lbl_hdg = QLabel("HDG: 000°")
 
         for lbl in (self.lbl_roll, self.lbl_pitch, self.lbl_hdg):
-            lbl.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+            lbl.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            lbl.setStyleSheet("color: #38bdf8; background: #0b1329; border: 1px solid #1e293b; border-radius: 3px; padding: 2px 4px;")
+            lbl.setStyleSheet("color: #38bdf8; background: #0b1329; border: 1px solid #1e293b; border-radius: 3px; padding: 1px 3px;")
 
         readout_layout.addWidget(self.lbl_roll, 0, 0)
         readout_layout.addWidget(self.lbl_pitch, 0, 1)
         readout_layout.addWidget(self.lbl_hdg, 0, 2)
         root.addLayout(readout_layout)
+
 
     def update_telemetry(self, state: Any) -> None:
         """Refresh HUD elements from a TelemetryState-like object."""

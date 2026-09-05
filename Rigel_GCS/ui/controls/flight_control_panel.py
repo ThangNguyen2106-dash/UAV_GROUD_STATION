@@ -31,27 +31,28 @@ class FlightStatusPanel(QFrame):
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(6, 6, 6, 6)
-        layout.setSpacing(6)
+        layout.setContentsMargins(2, 2, 2, 2)
+        layout.setSpacing(2)
 
         # ----------------------------------------------------
         # 1. ARM & MODE STATUS (COMPACT SIDE-BY-SIDE)
         # ----------------------------------------------------
         status_box = QGroupBox("VEHICLE STATE")
+        status_box.setStyleSheet("QGroupBox { font-size: 8.5pt; font-weight: bold; }")
         s_layout = QGridLayout(status_box)
-        s_layout.setContentsMargins(6, 6, 6, 6)
-        s_layout.setSpacing(6)
+        s_layout.setContentsMargins(4, 4, 4, 4)
+        s_layout.setSpacing(4)
 
         self.arm_status_badge = QLabel("DISARMED")
         self.arm_status_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.arm_status_badge.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+        self.arm_status_badge.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
         self.arm_status_badge.setStyleSheet("""
             QLabel {
                 background: #1e293b;
                 color: #94a3b8;
                 border: 1px solid #334155;
-                border-radius: 4px;
-                padding: 6px 4px;
+                border-radius: 3px;
+                padding: 3px 4px;
             }
         """)
         s_layout.addWidget(QLabel("Motors:"), 0, 0)
@@ -59,20 +60,21 @@ class FlightStatusPanel(QFrame):
 
         self.mode_badge = QLabel("--")
         self.mode_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.mode_badge.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+        self.mode_badge.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
         self.mode_badge.setStyleSheet("""
             QLabel {
                 background: rgba(2, 132, 199, 0.15);
                 color: #38bdf8;
                 border: 1px solid #0284c7;
-                border-radius: 4px;
-                padding: 6px 4px;
+                border-radius: 3px;
+                padding: 3px 4px;
             }
         """)
-        s_layout.addWidget(QLabel("Mode:"), 1, 0)
-        s_layout.addWidget(self.mode_badge, 1, 1)
+        s_layout.addWidget(QLabel("Mode:"), 0, 2)
+        s_layout.addWidget(self.mode_badge, 0, 3)
 
         layout.addWidget(status_box)
+
 
     def set_active_vehicle(self, key: Optional[tuple[str, int, int]]) -> None:
         self.selected_key = key
@@ -94,8 +96,8 @@ class FlightStatusPanel(QFrame):
                         background: rgba(239, 68, 68, 0.2);
                         color: #ef4444;
                         border: 1px solid #ef4444;
-                        border-radius: 4px;
-                        padding: 6px 4px;
+                        border-radius: 3px;
+                        padding: 3px 6px;
                         font-weight: bold;
                     }
                 """)
@@ -106,8 +108,8 @@ class FlightStatusPanel(QFrame):
                         background: #1e293b;
                         color: #94a3b8;
                         border: 1px solid #334155;
-                        border-radius: 4px;
-                        padding: 6px 4px;
+                        border-radius: 3px;
+                        padding: 3px 6px;
                         font-weight: bold;
                     }
                 """)
@@ -121,14 +123,15 @@ class FlightStatusPanel(QFrame):
     def _reset_display(self) -> None:
         self._is_armed = False
         self._current_mode = "--"
-        self.arm_status_badge.setText("DISARMED")
+        self.arm_status_badge.setText("🔒 DISARMED")
         self.arm_status_badge.setStyleSheet("""
             QLabel {
                 background: #1e293b;
                 color: #94a3b8;
                 border: 1px solid #334155;
-                border-radius: 4px;
-                padding: 6px 4px;
+                border-radius: 3px;
+                padding: 3px 6px;
+                font-weight: bold;
             }
         """)
         self.mode_badge.setText("--")

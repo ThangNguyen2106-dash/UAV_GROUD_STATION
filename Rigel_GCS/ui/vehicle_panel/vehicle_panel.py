@@ -23,7 +23,7 @@ class VehiclePanel(QFrame):
         layout.setSpacing(6)
 
         self.hud = HUDWidget()
-        layout.addWidget(self.hud)
+        layout.addWidget(self.hud, 1)
 
     def update_telemetry(self, state: Any) -> None:
         self.hud.update_telemetry(state)
